@@ -185,9 +185,9 @@
   /** Visual selection is opt-in. The cursor still tracks payload and view
    * changes before then, but ordinary mouse users never inherit a permanent
    * accent ring merely because keyboard navigation exists. And it is put away
-   * again by the mouse — a press in the grid, or the Today button — since one
-   * stray key otherwise left it up for the session, and paging a month then
-   * carried it onto the same date, where it read as a second today
+   * again by the mouse — a press in the grid, or the header's ‹ › and Today —
+   * since one stray key otherwise left it up for the session, and paging a
+   * month then carried it onto the same date, where it read as a second today
    * (2026-10-14, live). Hidden, not moved: the next key resumes from it. */
   let keyboardActive = $state(false);
   const visibleKeyboardCursor = $derived(keyboardActive ? keyboardCursor : null);
@@ -2474,8 +2474,8 @@
     {busy} {error} {calendars} {view} {listMode}
     errorAction={retry && retry.forError === error ? retry : null}
     onToggleList={toggleList}
-    onPrev={() => step(-1)}
-    onNext={() => step(1)}
+    onPrev={() => { keyboardActive = false; step(-1); }}
+    onNext={() => { keyboardActive = false; step(1); }}
     onToday={() => { keyboardActive = false; goToday(); }}
     onQuickAdd={openQuickAdd}
     onSearch={() => (searchOpen = true)}

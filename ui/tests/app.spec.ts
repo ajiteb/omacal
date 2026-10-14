@@ -5856,6 +5856,31 @@ test.describe('App: keyboard event navigation', () => {
     await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
   });
 
+  /* The gesture in the report itself: a stray key, then the header's arrows
+     to page — which carried the ring onto the same date a period on. */
+  test('the header arrows hide the keyboard selection', async ({ page }) => {
+    await page.keyboard.press('w');
+    await page.getByRole('button', { name: 'Next week' }).click();
+    await expect(page.locator('.kbd-status')).toHaveCount(0);
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+
+    await page.keyboard.press('w');
+    await expect(page.locator('.kbd-status')).toContainText('Selected');
+    await page.getByRole('button', { name: 'Previous week' }).click();
+    await expect(page.locator('.kbd-status')).toHaveCount(0);
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+  });
+
+  /* `h` and `l` are the keyboard's own arrows, so they page and keep it
+     showing. Fails the moment the hide moves into `step`, which all four share. */
+  test('h and l keep the keyboard selection', async ({ page }) => {
+    await page.keyboard.press('w');
+    await page.keyboard.press('l');
+    await expect(page.locator('.kbd-status')).toContainText('Selected');
+    await page.keyboard.press('h');
+    await expect(page.locator('.kbd-status')).toContainText('Selected');
+  });
+
   /* `t` is the keyboard's own Today: it moves the selection home and keeps it
      showing. Fails the moment the hide moves into `goToday`, which both share. */
   test('t keeps the keyboard selection, back on today', async ({ page }) => {
