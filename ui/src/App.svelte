@@ -184,7 +184,11 @@
   let keyboardCursor = $state<KeyboardCursor>(dayCursor(dayStart(Date.now())));
   /** Visual selection is opt-in. The cursor still tracks payload and view
    * changes before then, but ordinary mouse users never inherit a permanent
-   * accent ring merely because keyboard navigation exists. */
+   * accent ring merely because keyboard navigation exists. And it is put away
+   * again by the mouse — a press in the grid, or the Today button — since one
+   * stray key otherwise left it up for the session, and paging a month then
+   * carried it onto the same date, where it read as a second today
+   * (2026-10-14, live). Hidden, not moved: the next key resumes from it. */
   let keyboardActive = $state(false);
   const visibleKeyboardCursor = $derived(keyboardActive ? keyboardCursor : null);
   /** A `j`/`k` that crossed the loaded payload. The adjacent period is fetched
@@ -741,9 +745,10 @@
   /** Backspace on the vim-style event cursor takes the same guarded route as
    * the popover's Delete button: fetch the current detail for permissions,
    * preserve the selected occurrence's identity, then open `DeleteConfirm`.
-   * Nothing is deleted by the key itself. */
+   * Nothing is deleted by the key itself, and nothing is asked about a
+   * selection the mouse has hidden — the same gate as `openSelectedEvent`. */
   async function deleteSelectedEvent() {
-    if (!listable(view)) return;
+    if (!keyboardActive || !listable(view)) return;
     const event = eventAtCursor(keyboardDays, keyboardCursor);
     if (!event) return;
     // Not on Google yet: nothing to delete until it saves (part 3 spec §5).
@@ -2471,7 +2476,7 @@
     onToggleList={toggleList}
     onPrev={() => step(-1)}
     onNext={() => step(1)}
-    onToday={goToday}
+    onToday={() => { keyboardActive = false; goToday(); }}
     onQuickAdd={openQuickAdd}
     onSearch={() => (searchOpen = true)}
     ontasks={() => (tasksOpen = !tasksOpen)}
@@ -2539,7 +2544,11 @@
                     width={tasksWidth}
                     onresize={(px) => (tasksWidth = px)} />
     {/if}
-    <div class="view" use:periodPaging>
+    <!-- `pointerdown`, not `click`, so a drag or a right-click puts the
+         keyboard's ring away too — see `keyboardActive`. And on the way down:
+         a task's drag and the draft's stop the press before it would bubble
+         back up to here. -->
+    <div class="view" use:periodPaging onpointerdowncapture={() => (keyboardActive = false)}>
     {#if view === 'month'}
       {#if shownMonth}
         {#if listMode}

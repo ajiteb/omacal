@@ -5820,6 +5820,68 @@ test.describe('App: keyboard event navigation', () => {
     await expect(confirm.locator('h2')).toContainText('Review notes');
     expect(await deleteCalls(page)).toEqual([]);
   });
+
+  /* The ring belongs to the keyboard, so the mouse puts it away (2026-10-14,
+     live): one stray `w` used to leave it up for the rest of the session,
+     and paging a month carried it onto the same date, where it read as a
+     second today. Today's day header is the click — inside the grid, with no
+     handler of its own, so nothing but the hide can answer it. */
+  test('a mouse click in the grid hides the keyboard selection', async ({ page }) => {
+    await page.keyboard.press('w');
+    await expect(page.locator('[data-kbd-selected-day]')).toBeVisible();
+
+    await page.locator('.head.today').click();
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+    await expect(page.locator('.kbd-status')).toHaveCount(0);
+  });
+
+  /* The cursor is hidden, not forgotten, so the next key moves on from where
+     it was — Tuesday, then Wednesday — exactly as the very first `w` moves off
+     today rather than merely revealing it. */
+  test('after a click, the next navigation key brings the selection back', async ({ page }) => {
+    await page.keyboard.press('w');
+    await page.locator('.head.today').click();
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+
+    await page.keyboard.press('w');
+    await expect(page.locator('[data-kbd-selected-day]'))
+      .toHaveAttribute('data-start-ms', String(APP_MON + 2 * 24 * 3_600_000));
+  });
+
+  test('the Today button hides the keyboard selection', async ({ page }) => {
+    await page.keyboard.press('w');
+    await expect(page.locator('[data-kbd-selected-day]')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Today', exact: true }).click();
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+  });
+
+  /* `t` is the keyboard's own Today: it moves the selection home and keeps it
+     showing. Fails the moment the hide moves into `goToday`, which both share. */
+  test('t keeps the keyboard selection, back on today', async ({ page }) => {
+    await page.keyboard.press('w');
+    await page.keyboard.press('t');
+    await expect(page.locator('[data-kbd-selected-day]'))
+      .toHaveAttribute('data-start-ms', String(APP_MON));
+  });
+
+  /* A hidden selection must not be acted on. `deleteSelectedEvent` asks for
+     the event's detail synchronously, before its first await, so by the time
+     the following `w` has landed any such request is already in the log. */
+  test('Backspace does nothing once a click has hidden the selection', async ({ page }) => {
+    await page.keyboard.press('j');
+    await expect(selectedTitle(page)).toContainText('Plan the launch');
+    await page.locator('.head.today').click();
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+
+    await page.keyboard.press('Backspace');
+    await page.keyboard.press('w');
+    await expect(page.locator('[data-kbd-selected-day]')).toBeVisible();
+    expect(await page.evaluate(() =>
+      window.__harness.calls.filter((call) => call.cmd === 'event_detail').length,
+    )).toBe(0);
+    await expect(page.getByRole('dialog', { name: 'Delete event' })).toHaveCount(0);
+  });
 });
 
 test.describe('App: week panning', () => {
@@ -7472,6 +7534,22 @@ test.describe('tasks on the grid', () => {
     await expect.poll(() => page.evaluate(() =>
       (window as any).__harness.calls.filter((c: any) => c.cmd === 'update_task').pop()?.args,
     )).toMatchObject({ summary: 'Call the bank', dueMs: APP_MON + 12.5 * 3_600_000, dueAllDay: false });
+  });
+
+  /* A press on a task at an hour is stopped short of the grid by its own drag
+     (`startPinDrag`), so the keyboard's ring is put away on the way down —
+     capture — or not at all. */
+  test('grabbing a task at an hour hides the keyboard selection', async ({ page }) => {
+    await openWeek(page, 'timed-task');
+    const title = page.getByTestId('week-body').locator('.tpin .tt', { hasText: 'Call the bank' });
+    await title.hover();
+    await page.keyboard.press('w');
+    await expect(page.locator('[data-kbd-selected-day]')).toBeVisible();
+
+    await page.mouse.down();
+    await expect(page.locator('[data-kbd-selected-day]')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
   });
 
   test('escape during a drag at an hour writes nothing', async ({ page }) => {
