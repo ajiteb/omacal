@@ -8,6 +8,23 @@
    Components keep owning background-color and border; the chevron is two
    gradients off var(--muted), so it follows the theme. */
 
+/* The window's typeface, and the one declaration the font setting moves.
+   `--app-font-family` is set by `appearance.ts` only for a chosen face;
+   unset is the stack below, which is what `'system'` means and what every
+   install wore before the setting existed. Nothing is bundled — see
+   `FIRA_CODE_STACK` for why a request the machine cannot honour still lands
+   somewhere monospaced.
+
+   Here rather than in `App.svelte` for the reason above this: the component
+   harness mounts a component without App, and a settings tab that previewed
+   a face nothing in the test window wore could not be tested at all. The
+   menu-bar popup keeps its own `font-family` (Menubar.svelte) and so is
+   untouched by the setting — `main.ts` keeps that window's typography
+   separate on purpose. */
+body {
+  font-family: var(--app-font-family, -apple-system, 'SF Pro Text', Inter, system-ui, sans-serif);
+}
+
 select {
   appearance: none;
   -webkit-appearance: none;

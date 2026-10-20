@@ -19,7 +19,7 @@ import type { WeekStartDay } from '../../src/lib/weekstart';
 import type { Appearance, StartOnLogin, WeekViewDays, WindowFrame } from '../../src/lib/settings';
 import type { View } from '../../src/lib/views';
 import type { TaskSort } from '../../src/lib/tasks';
-import type { EventCornerStyle } from '../../src/lib/appearance';
+import type { EventCornerStyle, FontFamily } from '../../src/lib/appearance';
 import type { TemperatureUnit } from '../../src/lib/temperature';
 import { sliceWeek } from '../../src/lib/weekwindow';
 import {
@@ -717,6 +717,7 @@ type StubSettings = {
   inactiveBackgroundTransparency: number;
   eventTransparency: number;
   eventCornerStyle: EventCornerStyle;
+  fontFamily: FontFamily;
   transparentWindow: boolean;
   timeFormat: TimeFormat;
   dateFormat: import('../../src/lib/datefmt').DateFormat;
@@ -788,6 +789,9 @@ const DEFAULT_SETTINGS: StubSettings = {
   inactiveBackgroundTransparency: 0,
   eventTransparency: 0,
   eventCornerStyle: 'rounded',
+  // The face every install wears until somebody picks the other one, so
+  // every committed screenshot golden goes on describing the same pixels.
+  fontFamily: 'system',
   transparentWindow: true,
   listMode: false,
   combineIdenticalEvents: false,
@@ -1233,14 +1237,16 @@ export function installTauriStub(scenario: string): Harness {
             }
             break;
           case 'appearancePreferences': {
-            const { backgroundTransparency: bg, eventTransparency: ev, eventCornerStyle } = value;
+            const { backgroundTransparency: bg, eventTransparency: ev, eventCornerStyle,
+                    fontFamily } = value;
             const inactive = value.inactiveBackgroundTransparency ?? bg;
             if (!Number.isFinite(bg) || bg < 0 || bg > 50 || !Number.isFinite(inactive) || inactive < 0
                 || inactive > 50 || ev < 0 || ev > 25) {
               throw new Error('background transparency must be between 0 and 50 percent; event transparency between 0 and 25 percent');
             }
             settings = saveSettings({ ...settings, backgroundTransparency: bg,
-              inactiveBackgroundTransparency: inactive, eventTransparency: ev, eventCornerStyle });
+              inactiveBackgroundTransparency: inactive, eventTransparency: ev, eventCornerStyle,
+              fontFamily });
             return { ...settings };
           }
           // The grouped keys land in the fields they are grouped from.

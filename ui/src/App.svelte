@@ -2752,8 +2752,7 @@
      takes what it needs, and the view takes the rest — see each view's own
      `flex: 1` for the other half of it. */
   :global(html), :global(body), :global(#app) { height: 100%; }
-  :global(body) { background: var(--calendar-canvas, var(--bg)); color: var(--text); margin: 0;
-                  font-family: -apple-system, 'SF Pro Text', Inter, system-ui, sans-serif; }
+  :global(body) { background: var(--calendar-canvas, var(--bg)); color: var(--text); margin: 0; }
 
   /* `border-box` is load-bearing: without it the 28px of vertical padding
      lands *outside* the 100%, and the window scrolls by exactly that much.

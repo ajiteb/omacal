@@ -4,7 +4,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { TemperatureUnit } from './temperature';
 import type { TimeFormat } from './timefmt';
 import type { WeekStartDay } from './weekstart';
-import type { EventCornerStyle } from './appearance';
+import type { EventCornerStyle, FontFamily } from './appearance';
 import type { View } from './views';
 import type { TaskSort } from './tasks';
 
@@ -144,6 +144,9 @@ export type AppSettings = {
   eventTransparency: number;
   /** The shared corner treatment for every event representation. */
   eventCornerStyle: EventCornerStyle;
+  /** The typeface the window is set in. `'system'` until chosen; nothing is
+   *  bundled, so `'fira-code'` asks for a family the machine has. */
+  fontFamily: FontFamily;
   /** Whether the window can be seen through at all: true on Linux, whose
    *  window has a transparent backing store, false on macOS, whose does not.
    *  The modal offers the background slider only when it is true, the way
@@ -308,6 +311,7 @@ export type SettingValues = {
     backgroundTransparency: number;
     eventTransparency: number;
     eventCornerStyle: EventCornerStyle;
+    fontFamily: FontFamily;
     /** Absent means "the same as the active background". */
     inactiveBackgroundTransparency?: number;
   };
