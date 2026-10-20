@@ -311,6 +311,24 @@ jobs:
             # The .zsync rides along: an AppImage carrying update
             # information whose zsync is not on the release describes a file
             # that does not exist, which is worse than carrying none.
+            #
+            # Stable names beside the versioned ones, as the .dmg has below:
+            # the site's download buttons link
+            # releases/latest/download/omacal_amd64.AppImage (and _aarch64,
+            # and the two .debs), which no versioned name can serve — the
+            # buttons were 404s from the site's launch until v5.9.0. Copies,
+            # not renames: the installer, the updater manifest and the zsync
+            # glob all name the versioned file, and the installer refuses the
+            # copy on purpose (it has no .sig). The join job's checksum list
+            # hashes every asset, so it covers both.
+            image=$(ls target/release/bundle/appimage/*.AppImage)
+            suffix=${image##*_}
+            suffix=${suffix%.AppImage}
+            cp "$image" "target/release/bundle/appimage/omacal_${suffix}.AppImage"
+            deb=$(ls target/release/bundle/deb/*.deb)
+            debarch=${deb##*_}
+            debarch=${debarch%.deb}
+            cp "$deb" "target/release/bundle/deb/omacal_${debarch}.deb"
             files=$(ls target/release/bundle/appimage/*.AppImage \
                        target/release/bundle/appimage/*.AppImage.sig \
                        target/release/bundle/appimage/*.AppImage.zsync \
