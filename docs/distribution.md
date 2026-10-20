@@ -97,6 +97,14 @@ minutes; the `config.toml` escape hatch is also the documented courtesy exit
   hand-someone-one-file answer: download, `chmod +x`, run — Arch, Ubuntu,
   Fedora alike. `--no-bundle` (what this machine uses day-to-day) skips all
   of this and emits only the bare binary.
+- Every release builds the Linux set twice, x86_64 and ARM64, each natively
+  on its own GitHub runner (`ubuntu-22.04` and `ubuntu-22.04-arm`). The ARM
+  build is what Omarchy on an Apple Silicon Mac (Asahi) runs. Those kernels
+  use 16K memory pages, where most ARM64 Linux uses 4K, so an ARM image is
+  proven on an M-series machine, not only on the runner that built it. The
+  bundler names the two `omacal_<v>_amd64.*` and `omacal_<v>_aarch64.AppImage`
+  / `_arm64.deb` / `.aarch64.rpm`; the installer picks the AppImage by
+  `uname -m`, and `latest.json` carries `linux-x86_64` and `linux-aarch64`.
 - The AppImage bundles the build host's ICU, whose time zone data is frozen
   at the host's (Ubuntu 22.04: ICU 70, tzdata 2021a3), and the webview's
   JavaScript takes local-time offsets from it — so a zone that changed its
@@ -113,7 +121,9 @@ minutes; the `config.toml` escape hatch is also the documented courtesy exit
   copies both, and the macOS `.icns` carries every size to 1024px.
 - The released AppImage carries **AppImage update information** and ships a
   `.zsync` beside it, added by the repack step in `release.yml` (issue #27):
-  `appimagetool -u "gh-releases-zsync|x3me|omacal|latest|omacal_*_amd64.AppImage.zsync"`.
+  `appimagetool -u "gh-releases-zsync|x3me|omacal|latest|omacal_*_amd64.AppImage.zsync"`
+  on x86_64, and `omacal_*_aarch64.AppImage.zsync` on the ARM64 build, so
+  each image only ever updates from its own architecture's.
   That is what AppImageUpdate, appimaged and the third-party managers use to
   find and fetch a new version, and it is separate from the app's own
   in-app updater (which reads `latest.json` and verifies a minisign `.sig`).

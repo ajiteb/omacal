@@ -31,6 +31,12 @@ jobs:
           # against, and older glibc keeps the AppImage runnable on more
           # distros than the runner it was built on.
           - platform: ubuntu-22.04
+          # The same build on ARM, for Omarchy on Apple Silicon (Asahi) and
+          # any other aarch64 Linux. GitHub's arm64 runners are free for
+          # public repositories. Every Linux step below reads the machine's
+          # architecture rather than naming one, so this line is the whole
+          # difference between the two jobs.
+          - platform: ubuntu-22.04-arm
           - platform: macos-latest
     runs-on: ${{ matrix.platform }}
     steps:
@@ -51,8 +57,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libwebkit2gtk-4.1-dev build-essential curl wget file jq \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+          # The arm64 runner is a partner image with a smaller toolset than
+          # the x64 one. `gh` is needed by the attach step, which only a tag
+          # push runs — the v0.5.0 lesson is that a tool missing there is
+          # found on release day. Checked here, on every run, smoke included.
+          command -v gh >/dev/null 2>&1 || sudo apt-get install -y gh
+          for tool in gh jq file curl; do
+            command -v "$tool" >/dev/null 2>&1 || { echo "$tool is missing" >&2; exit 1; }
+          done
 
       - name: UI dependencies
         run: npm --prefix ui install
@@ -183,6 +197,17 @@ jobs:
           # one — and it comes from the same tauri.conf.json the release is
           # cut from, so it cannot describe a different build than it ships in.
           version=$(jq -r .version "$GITHUB_WORKSPACE/src-tauri/tauri.conf.json")
+          # Two names for the architecture, both read off this build: the
+          # machine's (`x86_64`, `aarch64`), which AppImage's own tools and
+          # keys use, and the bundler's, from the image's name (`amd64` on
+          # x86, `aarch64` on ARM), which the release assets carry.
+          arch=$(uname -m)
+          suffix=${image##*_}
+          suffix=${suffix%.AppImage}
+          case "$suffix" in
+            amd64 | aarch64) ;;
+            *) echo "unexpected AppImage name $image" >&2; exit 1 ;;
+          esac
           # Resolved and de-duplicated: the AppDir's root .desktop is a
           # symlink to the one under usr/share/applications, and `sed -i` on a
           # symlink replaces it with a regular file. Patch the target once and
@@ -207,13 +232,13 @@ jobs:
             {
               printf 'X-AppImage-Name=omacal\n'
               printf 'X-AppImage-Version=%s\n' "$version"
-              printf 'X-AppImage-Arch=x86_64\n'
+              printf 'X-AppImage-Arch=%s\n' "$arch"
               printf 'X-AppImage-Homepage=https://github.com/%s\n' "$GITHUB_REPOSITORY"
               printf 'X-AppImage-UpdateURL=https://github.com/%s\n' "$GITHUB_REPOSITORY"
             } >> "$desktop"
           done
           curl -fsSL -o appimagetool \
-            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+            "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$arch.AppImage"
           chmod +x appimagetool
           # `-u` is the other half of issue #27, and the half that actually
           # updates anything: it embeds AppImage's own update information in
@@ -222,9 +247,11 @@ jobs:
           # only let a manager *notice* a new version; without this there is
           # no file behind the word "auto-update". The glob is matched against
           # the release's assets, so it must keep describing whatever the
-          # bundler names the image (`omacal_<version>_amd64.AppImage`).
-          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 ./appimagetool \
-            -u "gh-releases-zsync|${GITHUB_REPOSITORY%%/*}|${GITHUB_REPOSITORY#*/}|latest|omacal_*_amd64.AppImage.zsync" \
+          # bundler names the image (`omacal_<version>_amd64.AppImage`, or
+          # `_aarch64` on ARM) — and name this architecture's alone, or an
+          # x86 image could be "updated" with the ARM one's blocks.
+          APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$arch" ./appimagetool \
+            -u "gh-releases-zsync|${GITHUB_REPOSITORY%%/*}|${GITHUB_REPOSITORY#*/}|latest|omacal_*_${suffix}.AppImage.zsync" \
             squashfs-root "$image"
           test -s "$image.zsync" || { echo "appimagetool wrote no .zsync" >&2; exit 1; }
           rm -rf squashfs-root appimagetool
@@ -236,6 +263,11 @@ jobs:
           fi
           if ! grep -qx "X-AppImage-Version=$version" squashfs-root/*.desktop; then
             echo "the AppImage metadata did not survive the repack" >&2
+            exit 1
+          fi
+          if ! ./"$image" --appimage-updateinformation | grep -q "_${suffix}\.AppImage\.zsync"; then
+            echo "the update information does not name this architecture's image" >&2
+            ./"$image" --appimage-updateinformation >&2 || true
             exit 1
           fi
           rm -rf squashfs-root
@@ -257,7 +289,7 @@ jobs:
           test -s "$image.sig" || { echo "no signature was produced" >&2; exit 1; }
 
       # Tag push: attach the repaired bundles to a draft release for the tag.
-      # Both matrix jobs race to create it; the loser just uploads.
+      # The matrix jobs race to create it; the losers just upload.
       - name: Attach to draft release
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -327,9 +359,9 @@ jobs:
 
   # What the running app's update check reads (tauri.conf.json points at this
   # file via the release's /latest redirect). A join job rather than a step of
-  # either build: the Linux signature exists only after that job's repack
+  # any build: each Linux signature exists only after that job's repack
   # re-sign, and the macOS one only after its build — this is the one place
-  # both are in view. The darwin entry appears only when the mac updater
+  # all of them are in view. The darwin entry appears only when the mac updater
   # artifact is on the release AND Apple signing ran (an unsigned .app would
   # update users into a Gatekeeper wall); until the Apple secrets land, the
   # manifest stays Linux-only exactly as before.
@@ -348,15 +380,30 @@ jobs:
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
             -p "*.AppImage" -p "*.AppImage.sig" -p "*.app.tar.gz" -p "*.app.tar.gz.sig" || true
 
-          image=$(ls *.AppImage)
           jq -n \
             --arg version "${tag#v}" \
             --arg date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg sig "$(cat "$image.sig")" \
-            --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$image" \
-            '{version: $version, pub_date: $date,
-              platforms: {"linux-x86_64": {signature: $sig, url: $url}}}' \
+            '{version: $version, pub_date: $date, platforms: {}}' \
             > latest.json
+
+          # One entry per Linux architecture: keyed the way the updater plugin
+          # asks (`linux-<machine>`), matched to its image by the bundler's
+          # name for that architecture. Both are required. This job only runs
+          # when every build succeeded, so a missing image is a broken upload,
+          # and a manifest without it would quietly stop updating that
+          # architecture's AppImages.
+          for pair in amd64:linux-x86_64 aarch64:linux-aarch64; do
+            suffix=${pair%%:*}
+            key=${pair#*:}
+            image=$(ls omacal_*_"$suffix".AppImage)
+            test -s "$image.sig" || { echo "$image has no signature" >&2; exit 1; }
+            jq \
+              --arg key "$key" \
+              --arg sig "$(cat "$image.sig")" \
+              --arg url "https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$image" \
+              '.platforms[$key] = {signature: $sig, url: $url}' \
+              latest.json > latest.json.tmp && mv latest.json.tmp latest.json
+          done
 
           mac=$(ls *.app.tar.gz 2>/dev/null | head -1 || true)
           if [ -n "$mac" ] && [ -s "$mac.sig" ] && [ "$APPLE_SIGNED" = "true" ]; then
@@ -372,7 +419,7 @@ jobs:
 
           # SHA-256 over every artifact, for the install script and anyone
           # verifying by hand. Assembled here for the same reason
-          # latest.json is: this is the one place both platforms' files are
+          # latest.json is: this is the one place every platform's files are
           # in view. The manifest and this file are excluded from
           # themselves — a checksum file listing itself can never verify.
           gh release download "$tag" --repo "$GITHUB_REPOSITORY" \

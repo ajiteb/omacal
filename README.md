@@ -83,7 +83,8 @@ subscription is someone else's calendar, so it is read-only throughout.
 
     curl -fsSL https://omacal.app/install.sh | sh
 
-Linux x86_64 and macOS on Apple Silicon. On Linux the AppImage lands in
+Linux on x86_64 or ARM64 (Omarchy on an Apple Silicon Mac, through Asahi,
+included) and macOS on Apple Silicon. On Linux the AppImage lands in
 `~/.local/bin` with a desktop entry; on a Mac, OmaCal.app in Applications
 with the `omacal` command on your PATH, signed and notarized. A `.deb`,
 `.rpm` and `.dmg` are on the [releases page](https://github.com/x3me/omacal/releases).
