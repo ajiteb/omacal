@@ -1458,6 +1458,7 @@ test.describe('Header', () => {
       inactiveBackgroundTransparency: 0,
       eventTransparency: 25,
       eventCornerStyle: 'square',
+      fontFamily: 'system',
     });
     expect(await page.evaluate(() => ({
       data: document.documentElement.dataset.eventTransparency,
@@ -2113,6 +2114,99 @@ test.describe('Header', () => {
       await expect(page.locator('.filmstrip')).toHaveCount(0);
     });
   }
+
+  /**
+   * The typeface setting. OmaCal bundles no fonts, so the whole feature is
+   * one CSS variable on `<html>` plus a stack that ends in the platform's
+   * monospace, and `body` in `app.css` is what reads it. The assertions run
+   * in that order — stored choice, variable, the face the window is actually
+   * set in — because only the last is what a user sees, and a variable
+   * nothing reads would still pass the first two.
+   */
+  test('Appearance offers a typeface and sets the window in it', async ({ page }) => {
+    await page.goto(show('Header', 'connected'));
+    let modal = await openSettings(page, 'Appearance');
+
+    await expect(modal.getByRole('radio', { name: 'System' })).toBeChecked();
+    const systemFace = await page.evaluate(() => ({
+      variable: document.documentElement.style.getPropertyValue('--app-font-family'),
+      data: document.documentElement.dataset.fontFamily ?? null,
+      drawn: getComputedStyle(document.body).fontFamily,
+    }));
+    expect(systemFace.variable).toBe('');
+    expect(systemFace.data).toBeNull();
+    expect(systemFace.drawn).not.toContain('Fira Code');
+
+    await modal.getByRole('radio', { name: 'Fira Code' }).check();
+    await expect.poll(() => page.evaluate(() =>
+      (window as any).__harness.settingValues('appearancePreferences').length,
+    )).toBe(1);
+    // One write carrying the whole appearance tuple: the picker shares the
+    // sliders' preview and therefore their key.
+    expect(await page.evaluate(() =>
+      (window as any).__harness.settingValues('appearancePreferences').pop().fontFamily,
+    )).toBe('fira-code');
+
+    const firaFace = await page.evaluate(() => ({
+      data: document.documentElement.dataset.fontFamily,
+      variable: document.documentElement.style.getPropertyValue('--app-font-family'),
+      drawn: getComputedStyle(document.body).fontFamily,
+    }));
+    expect(firaFace.data).toBe('fira-code');
+    expect(firaFace.variable).toContain('Fira Code');
+    // The fallback tail is the point of asserting the string: a machine
+    // without Fira Code — CI's browsers, among others — must still end up
+    // monospaced rather than back on the system's sans-serif.
+    expect(firaFace.variable).toContain('monospace');
+    expect(firaFace.drawn).toContain('Fira Code');
+    expect(firaFace.drawn).toContain('monospace');
+
+    // A reopen reads the stub's stored object, so this cannot pass merely
+    // because the radio kept the click.
+    await page.keyboard.press('Escape');
+    modal = await openSettings(page, 'Appearance');
+    await expect(modal.getByRole('radio', { name: 'Fira Code' })).toBeChecked();
+
+    // And back: `system` is the absence of the property, not a second copy
+    // of the system stack to keep in step with `app.css` by hand.
+    await modal.getByRole('radio', { name: 'System' }).check();
+    await expect.poll(() => page.evaluate(() =>
+      document.documentElement.style.getPropertyValue('--app-font-family'),
+    )).toBe('');
+    expect(await page.evaluate(() => document.documentElement.dataset.fontFamily ?? null)).toBeNull();
+  });
+
+  /**
+   * Nothing is bundled, so "Fira Code" is a request the machine can refuse
+   * in silence — CSS draws the fallback and says nothing about it. The tab
+   * says it instead, and only while that choice is in force: the warning is
+   * about what is on screen now, not a standing advertisement for a font.
+   *
+   * Whether the warning is *due* is a fact about the browser running this,
+   * not about omacal — Playwright's WebKit sees none of the host's fonts
+   * while Chromium sees all of them, so a test that asserted the warning
+   * outright would pass or fail by which machine ran it. It asks the same
+   * rule the modal asked (`isFontAvailable`, pinned in `fontcheck.spec.ts`)
+   * and holds the tab to that answer, in both directions.
+   */
+  test('a missing Fira Code is named rather than silently fallen back from', async ({ page }) => {
+    await page.goto(show('Header', 'connected'));
+    const modal = await openSettings(page, 'Appearance');
+    const warning = modal.getByText("Fira Code isn't installed here");
+    const installed = await page.evaluate(() => (window as any).__fontcheck.firaCodeInstalled());
+
+    // Never while the system face is in force, whatever this machine has:
+    // the warning describes the calendar on screen, and that one is not
+    // asking for Fira Code at all.
+    await expect(warning).toHaveCount(0);
+
+    await modal.getByRole('radio', { name: 'Fira Code' }).check();
+    if (installed) await expect(warning).toHaveCount(0);
+    else await expect(warning).toBeVisible();
+
+    await modal.getByRole('radio', { name: 'System' }).check();
+    await expect(warning).toHaveCount(0);
+  });
 });
 
 test.describe('CalendarPopover', () => {

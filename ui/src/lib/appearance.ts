@@ -1,12 +1,33 @@
 /** The appearance fields shared by startup, Settings' live preview, and IPC. */
 export type EventCornerStyle = 'rounded' | 'square';
 
+/** Which typeface the calendar window is set in. Nothing is bundled: both
+ *  values name families the machine already has. */
+export type FontFamily = 'system' | 'fira-code';
+
 export type AppearancePreferences = {
   backgroundTransparency: number;
   inactiveBackgroundTransparency?: number;
   eventTransparency: number;
   eventCornerStyle: EventCornerStyle;
+  fontFamily: FontFamily;
 };
+
+/**
+ * The stack `fira-code` asks for, most specific first.
+ *
+ * Fira Code is not shipped with omacal — packaging a font means carrying its
+ * licence, its four weights and a megabyte per build, for one face. So this
+ * names the family as every installer spells it, including the two Nerd Font
+ * repacks that Omarchy setups usually have instead of the plain one, and
+ * then falls through the platform's own monospace faces. The point of the
+ * setting is a monospaced calendar; an install without Fira Code still gets
+ * that rather than silently landing back on the system's sans-serif — and
+ * the settings tab says which of the two it ended up with.
+ */
+export const FIRA_CODE_STACK =
+  "'Fira Code', 'FiraCode Nerd Font', 'Fira Code Nerd Font', 'Fira Mono', " +
+  'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
 
 const current = new WeakMap<HTMLElement, AppearancePreferences>();
 const focused = new WeakMap<HTMLElement, boolean>();
@@ -68,6 +89,19 @@ export function applyAppearance(
     root.style.removeProperty('--event-card-radius');
     root.style.removeProperty('--event-chip-radius');
     root.style.removeProperty('--event-pill-radius');
+  }
+
+  // One variable, read by `body`'s own `font-family` with the system stack
+  // as its fallback — so `system` is the absence of the property rather than
+  // a second copy of that stack to keep in step. Everything else in the app
+  // inherits or says `font: inherit`, which is why no component needs to
+  // know this setting exists.
+  if (preferences.fontFamily === 'fira-code') {
+    root.dataset.fontFamily = 'fira-code';
+    root.style.setProperty('--app-font-family', FIRA_CODE_STACK);
+  } else {
+    delete root.dataset.fontFamily;
+    root.style.removeProperty('--app-font-family');
   }
 }
 

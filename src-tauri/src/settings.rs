@@ -50,6 +50,7 @@ const INACTIVE_BACKGROUND_TRANSPARENCY_KEY: &str = "inactive_background_transpar
 const BACKGROUND_TRANSPARENCY_KEY: &str = "background_transparency";
 const EVENT_TRANSPARENCY_KEY: &str = "event_transparency";
 const EVENT_CORNER_STYLE_KEY: &str = "event_corner_style";
+const FONT_FAMILY_KEY: &str = "font_family";
 const APPEARANCE_TRANSPARENCY_SEMANTICS_KEY: &str = "appearance_transparency_semantics";
 const ABSOLUTE_TRANSPARENCY_SEMANTICS: &str = "absolute-v1";
 /// Omarchy's `default-opacity` rule blends every window a little — 98.5%
@@ -298,6 +299,33 @@ impl EventCornerStyle {
         match self {
             EventCornerStyle::Rounded => "rounded",
             EventCornerStyle::Square => "square",
+        }
+    }
+}
+
+/// Which typeface the calendar window is set in.
+///
+/// Typed for [`EventCornerStyle`]'s reason, and read back the same way: an
+/// unrecognised row falls to `System`, the face every install already wore.
+///
+/// Nothing is bundled. `FiraCode` names a family the *machine* has — the UI
+/// asks for it ahead of a monospace fallback chain, so an install without
+/// Fira Code installed still reads in a monospace face rather than in
+/// something unreadable, and the settings tab says so when it cannot find
+/// the real one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FontFamily {
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "fira-code")]
+    FiraCode,
+}
+
+impl FontFamily {
+    fn as_str(self) -> &'static str {
+        match self {
+            FontFamily::System => "system",
+            FontFamily::FiraCode => "fira-code",
         }
     }
 }
@@ -600,6 +628,9 @@ pub struct AppSettings {
     /// Rounded preserves the shapes omacal shipped with; square removes the
     /// corner radius from every event representation, not from other UI.
     pub event_corner_style: EventCornerStyle,
+    /// The typeface the calendar window is set in. `System` for installs
+    /// without the row — the face the app has always drawn.
+    pub font_family: FontFamily,
     /// Whether the window can be seen through at all. The Linux window has a
     /// transparent backing store (`tauri.linux.conf.json`); the macOS one
     /// does not, since that needs Tauri's private-API feature, which this
@@ -957,6 +988,13 @@ pub(crate) async fn read_settings_with(pool: &SqlitePool, baseline: u8) -> AppSe
         event_corner_style: match read(pool, EVENT_CORNER_STYLE_KEY).await.as_deref() {
             Some("square") => EventCornerStyle::Square,
             _ => EventCornerStyle::Rounded,
+        },
+        // Absent, garbage and a spelling only a future version writes all
+        // land on the system face, `event_corner_style`'s rule: a row nobody
+        // here understands must not leave the window in a face nobody chose.
+        font_family: match read(pool, FONT_FAMILY_KEY).await.as_deref() {
+            Some("fira-code") => FontFamily::FiraCode,
+            _ => FontFamily::System,
         },
         // `== "12h"` rather than `!= "24h"`, the same polarity `list_mode`
         // takes and for the same reason: absent, garbage, and a value written
@@ -1451,13 +1489,15 @@ pub enum Setting {
     DefaultEventDurationMinutes(u32),
     /// Applied to the window at once (#138), through the webview's zoom.
     InterfaceScalePercent(u32),
-    /// The sliders and the corner picker share one preview, so they are one
-    /// write: a failure must not leave half a preview for the next launch.
+    /// The sliders, the corner picker and the typeface picker share one
+    /// preview, so they are one write: a failure must not leave half a
+    /// preview for the next launch.
     #[serde(rename_all = "camelCase")]
     AppearancePreferences {
         background_transparency: f64,
         event_transparency: f64,
         event_corner_style: EventCornerStyle,
+        font_family: FontFamily,
         /// Absent means "the same as the active background".
         inactive_background_transparency: Option<f64>,
     },
@@ -1647,6 +1687,7 @@ pub(crate) async fn store(pool: &SqlitePool, setting: &Setting) -> Result<(), Se
             background_transparency: background,
             event_transparency: events,
             event_corner_style: corners,
+            font_family: font,
             inactive_background_transparency: inactive,
         } => {
             let inactive = inactive.unwrap_or(*background);
@@ -1664,6 +1705,7 @@ pub(crate) async fn store(pool: &SqlitePool, setting: &Setting) -> Result<(), Se
                     (INACTIVE_BACKGROUND_TRANSPARENCY_KEY, &inactive),
                     (EVENT_TRANSPARENCY_KEY, &events),
                     (EVENT_CORNER_STYLE_KEY, corners.as_str()),
+                    (FONT_FAMILY_KEY, font.as_str()),
                     (APPEARANCE_TRANSPARENCY_SEMANTICS_KEY, ABSOLUTE_TRANSPARENCY_SEMANTICS),
                 ],
             )
@@ -1833,7 +1875,8 @@ mod tests {
         assert!(matches!(read(json!({"key": "lastView", "value": "bigyear"})), Setting::LastView(_)));
         assert!(matches!(
             read(json!({"key": "appearancePreferences", "value": {
-                "backgroundTransparency": 10.0, "eventTransparency": 5.0, "eventCornerStyle": "square"}})),
+                "backgroundTransparency": 10.0, "eventTransparency": 5.0, "eventCornerStyle": "square",
+                "fontFamily": "fira-code"}})),
             Setting::AppearancePreferences { inactive_background_transparency: None, .. }
         ));
         assert!(matches!(
@@ -1985,6 +2028,11 @@ mod tests {
             s.event_corner_style,
             EventCornerStyle::Rounded,
             "existing event shapes stay rounded",
+        );
+        assert_eq!(
+            s.font_family,
+            FontFamily::System,
+            "the face every install already wore until somebody picks another",
         );
         assert_eq!(
             s.time_format,
@@ -2216,15 +2264,16 @@ mod tests {
     async fn appearance_round_trips_as_one_choice_and_rejects_bad_percentages() {
         let p = pool().await;
 
-        let s = set(&p, Setting::AppearancePreferences { background_transparency: 35.0, event_transparency: 20.0, event_corner_style: EventCornerStyle::Square, inactive_background_transparency: None })
+        let s = set(&p, Setting::AppearancePreferences { background_transparency: 35.0, event_transparency: 20.0, event_corner_style: EventCornerStyle::Square, font_family: FontFamily::FiraCode, inactive_background_transparency: None })
             .await
             .unwrap();
         assert_eq!(s.background_transparency, 35.0);
         assert_eq!(s.event_transparency, 20.0);
         assert_eq!(s.event_corner_style, EventCornerStyle::Square);
+        assert_eq!(s.font_family, FontFamily::FiraCode);
 
         for (background, events) in [(50.1, 20.0), (35.0, 25.1)] {
-            let err = set(&p, Setting::AppearancePreferences { background_transparency: background, event_transparency: events, event_corner_style: EventCornerStyle::Rounded, inactive_background_transparency: None })
+            let err = set(&p, Setting::AppearancePreferences { background_transparency: background, event_transparency: events, event_corner_style: EventCornerStyle::Rounded, font_family: FontFamily::System, inactive_background_transparency: None })
                 .await
                 .unwrap_err();
             assert_eq!(err.to_string(), TRANSPARENCY_OUT_OF_RANGE);
@@ -2232,6 +2281,9 @@ mod tests {
             assert_eq!(unchanged.background_transparency, 35.0);
             assert_eq!(unchanged.event_transparency, 20.0);
             assert_eq!(unchanged.event_corner_style, EventCornerStyle::Square);
+            // The whole tuple is one decision: a refused percentage must not
+            // have taken the typeface from it on its way out.
+            assert_eq!(unchanged.font_family, FontFamily::FiraCode);
         }
     }
 
@@ -2248,10 +2300,10 @@ mod tests {
         assert_eq!((capped.background_transparency, capped.inactive_background_transparency), (50.0, 50.0));
         write(&p, EVENT_TRANSPARENCY_KEY, "90").await.unwrap();
         assert_eq!(read_settings(&p).await.event_transparency, 25.0);
-        let saved = set(&p, Setting::AppearancePreferences { background_transparency: 1.5, event_transparency: 20.5, event_corner_style: EventCornerStyle::Rounded, inactive_background_transparency: Some(4.1) }).await.unwrap();
+        let saved = set(&p, Setting::AppearancePreferences { background_transparency: 1.5, event_transparency: 20.5, event_corner_style: EventCornerStyle::Rounded, font_family: FontFamily::System, inactive_background_transparency: Some(4.1) }).await.unwrap();
         assert_eq!((saved.background_transparency, saved.inactive_background_transparency), (1.5, 4.1));
         assert_eq!(read_settings(&p).await.inactive_background_transparency, 4.1);
-        assert!(set(&p, Setting::AppearancePreferences { background_transparency: 10.0, event_transparency: 20.0, event_corner_style: EventCornerStyle::Square, inactive_background_transparency: Some(50.1) }).await.is_err());
+        assert!(set(&p, Setting::AppearancePreferences { background_transparency: 10.0, event_transparency: 20.0, event_corner_style: EventCornerStyle::Square, font_family: FontFamily::System, inactive_background_transparency: Some(50.1) }).await.is_err());
         let unchanged = read_settings(&p).await;
         assert_eq!((unchanged.background_transparency, unchanged.inactive_background_transparency, unchanged.event_transparency), (1.5, 4.1, 20.5));
     }
@@ -2275,7 +2327,7 @@ mod tests {
         assert_eq!(plain.event_transparency, 25.0);
 
         // Any new write marks the whole tuple absolute, including a real 0.
-        let absolute = set(&p, Setting::AppearancePreferences { background_transparency: 0.0, event_transparency: 25.0, event_corner_style: EventCornerStyle::Rounded, inactive_background_transparency: None })
+        let absolute = set(&p, Setting::AppearancePreferences { background_transparency: 0.0, event_transparency: 25.0, event_corner_style: EventCornerStyle::Rounded, font_family: FontFamily::System, inactive_background_transparency: None })
             .await
             .unwrap();
         assert_eq!(absolute.background_transparency, 0.0);
@@ -2318,6 +2370,17 @@ mod tests {
                 "{stored:?} is not a style this version writes",
             );
         }
+
+        write(&p, FONT_FAMILY_KEY, "fira-code").await.unwrap();
+        assert_eq!(read_settings(&p).await.font_family, FontFamily::FiraCode);
+        for stored in ["", "Fira Code", "firaCode", "monospace", "future-face"] {
+            write(&p, FONT_FAMILY_KEY, stored).await.unwrap();
+            assert_eq!(
+                read_settings(&p).await.font_family,
+                FontFamily::System,
+                "{stored:?} is not a face this version writes",
+            );
+        }
     }
 
     #[tokio::test]
@@ -2341,6 +2404,19 @@ mod tests {
             assert_eq!(
                 serde_json::to_string(&style).unwrap(),
                 format!("\"{}\"", style.as_str()),
+            );
+        }
+    }
+
+    /// The typeface's twin: a row read by eye in `sqlite3` says what the
+    /// settings tab sent, and `read_settings`' match arm is spelled against
+    /// the same string the form picked.
+    #[test]
+    fn the_font_familys_stored_spelling_is_its_wire_spelling() {
+        for face in [FontFamily::System, FontFamily::FiraCode] {
+            assert_eq!(
+                serde_json::to_string(&face).unwrap(),
+                format!("\"{}\"", face.as_str()),
             );
         }
     }
