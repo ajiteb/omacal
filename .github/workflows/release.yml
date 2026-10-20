@@ -58,7 +58,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev build-essential curl wget file jq \
-            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev \
+            xdg-utils
+          # xdg-utils: the AppImage bundler copies the host's /usr/bin/xdg-open
+          # into the image and fails without one (the repair step below then
+          # removes it again). The x64 image ships it; the arm64 one does not.
           # The arm64 runner is a partner image with a smaller toolset than
           # the x64 one. `gh` is needed by the attach step, which only a tag
           # push runs — the v0.5.0 lesson is that a tool missing there is
