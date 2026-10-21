@@ -466,8 +466,8 @@
     void saveAppearancePreferences();
   }
 
-  /** Whether this machine actually has Fira Code, or `null` where the page
-   *  gave us nothing to measure with. Read once per mount: a font is not
+  /** Whether this machine has FiraCode Nerd Font Mono, or `null` where the
+   *  page gave us nothing to measure with. Read once per mount: a font is not
    *  installed and uninstalled while a modal is open, and the measurement
    *  reflows text. `null` shows no warning rather than a guessed one. */
   let firaCodeHere = $state<boolean | null>(null);
@@ -1200,6 +1200,43 @@
       </p>
 
     {:else if pane === 'Appearance'}
+      <section class="appearance-section" aria-labelledby="typeface-heading">
+        <h2 id="typeface-heading">Typeface</h2>
+        <fieldset class="shape" disabled={!settings}>
+          <legend>Font</legend>
+          <label class:chosen={(settings?.fontFamily ?? 'system') === 'system'}>
+            <input
+              type="radio"
+              name="font-family"
+              value="system"
+              checked={(settings?.fontFamily ?? 'system') === 'system'}
+              onchange={() => chooseFont('system')}
+            />
+            <span class="font-sample system" aria-hidden="true">Ag</span>
+            System
+          </label>
+          <label class:chosen={settings?.fontFamily === 'fira-code'}>
+            <input
+              type="radio"
+              name="font-family"
+              value="fira-code"
+              checked={settings?.fontFamily === 'fira-code'}
+              onchange={() => chooseFont('fira-code')}
+            />
+            <span class="font-sample fira" aria-hidden="true">Ag</span>
+            FiraCode Nerd Font Mono
+          </label>
+        </fieldset>
+        <p class="hint">
+          FiraCode Nerd Font Mono sets the whole calendar in a monospaced
+          face; times and dates line up column by column. OmaCal ships no
+          fonts, so this uses the font installed on this machine.
+          {#if settings?.fontFamily === 'fira-code' && firaCodeHere === false}
+            <strong class="missing-font">FiraCode Nerd Font Mono isn't installed here, so another monospaced face is standing in. Install it for your platform and reopen OmaCal.</strong>
+          {/if}
+        </p>
+      </section>
+
       <div class="row wide">
         <span class="lab">Theme</span>
         <ThemePicker
@@ -1330,43 +1367,6 @@
           it runs on Windows under WSL.
           {#if (settings?.interfaceScalePercent ?? 100) !== 100}
             <button type="button" class="scale-reset" onclick={() => void saveInterfaceScale(100)}>Back to 100%</button>
-          {/if}
-        </p>
-      </section>
-
-      <section class="appearance-section" aria-labelledby="typeface-heading">
-        <h2 id="typeface-heading">Typeface</h2>
-        <fieldset class="shape" disabled={!settings}>
-          <legend>Font</legend>
-          <label class:chosen={(settings?.fontFamily ?? 'system') === 'system'}>
-            <input
-              type="radio"
-              name="font-family"
-              value="system"
-              checked={(settings?.fontFamily ?? 'system') === 'system'}
-              onchange={() => chooseFont('system')}
-            />
-            <span class="font-sample system" aria-hidden="true">Ag</span>
-            System
-          </label>
-          <label class:chosen={settings?.fontFamily === 'fira-code'}>
-            <input
-              type="radio"
-              name="font-family"
-              value="fira-code"
-              checked={settings?.fontFamily === 'fira-code'}
-              onchange={() => chooseFont('fira-code')}
-            />
-            <span class="font-sample fira" aria-hidden="true">Ag</span>
-            Fira Code
-          </label>
-        </fieldset>
-        <p class="hint">
-          Fira Code sets the whole calendar in a monospaced face; times and
-          dates line up column by column. OmaCal ships no fonts, so this uses
-          the Fira Code installed on this machine.
-          {#if settings?.fontFamily === 'fira-code' && firaCodeHere === false}
-            <strong class="missing-font">Fira Code isn't installed here, so another monospaced face is standing in. Install it (<code>ttf-fira-code</code> on Arch, <code>fonts-firacode</code> on Debian, <code>brew install --cask font-fira-code</code> on macOS) and reopen OmaCal.</strong>
           {/if}
         </p>
       </section>
@@ -2165,15 +2165,14 @@
   .event-sample.rounded { border-radius: 6px; }
   .event-sample.square { border-radius: 0; }
   /* Each sample is set in the face it offers, so the choice is visible
-     before it is made — and on a machine without Fira Code the second one
-     draws the fallback the setting would actually give you. */
+     before it is made — and on a machine without FiraCode Nerd Font Mono the
+     second one draws the fallback the setting would actually give you. */
   .font-sample { width: 34px; flex: none; text-align: center; font-size: 14px;
                  color: var(--text); }
   .font-sample.system { font-family: -apple-system, 'SF Pro Text', Inter, system-ui, sans-serif; }
-  .font-sample.fira { font-family: 'Fira Code', 'FiraCode Nerd Font', 'Fira Code Nerd Font',
+  .font-sample.fira { font-family: 'FiraCode Nerd Font Mono', 'FiraCode Nerd Font', 'Fira Code',
                                    'Fira Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   .missing-font { display: block; margin-top: 6px; font-weight: 400; color: var(--text); }
-  .missing-font code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 
   /* A colophon, not a control: the quietest text in the modal, at the very
      bottom, on every tab — where "what version am I on?" goes looking. */

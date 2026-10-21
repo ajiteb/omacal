@@ -308,11 +308,11 @@ impl EventCornerStyle {
 /// Typed for [`EventCornerStyle`]'s reason, and read back the same way: an
 /// unrecognised row falls to `System`, the face every install already wore.
 ///
-/// Nothing is bundled. `FiraCode` names a family the *machine* has — the UI
-/// asks for it ahead of a monospace fallback chain, so an install without
-/// Fira Code installed still reads in a monospace face rather than in
-/// something unreadable, and the settings tab says so when it cannot find
-/// the real one.
+/// Nothing is bundled. `FiraCode` requests FiraCode Nerd Font Mono, a family
+/// the *machine* has — the UI asks for it ahead of a monospace fallback
+/// chain, so an install without it still reads in a monospace face rather
+/// than in something unreadable, and the settings tab says so when it cannot
+/// find the real one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FontFamily {
     #[serde(rename = "system")]
@@ -2373,7 +2373,7 @@ mod tests {
 
         write(&p, FONT_FAMILY_KEY, "fira-code").await.unwrap();
         assert_eq!(read_settings(&p).await.font_family, FontFamily::FiraCode);
-        for stored in ["", "Fira Code", "firaCode", "monospace", "future-face"] {
+        for stored in ["", "FiraCode", "firaCode", "monospace", "future-face"] {
             write(&p, FONT_FAMILY_KEY, stored).await.unwrap();
             assert_eq!(
                 read_settings(&p).await.font_family,

@@ -23,12 +23,12 @@ test.describe('isFontAvailable', () => {
   };
 
   test('an installed family changes the measurement', () => {
-    expect(isFontAvailable('Fira Code', machineWith(['Fira Code']))).toBe(true);
+    expect(isFontAvailable('FiraCode Nerd Font Mono', machineWith(['FiraCode Nerd Font Mono']))).toBe(true);
   });
 
   test('a family nobody has measures as the fallback and is refused', () => {
-    expect(isFontAvailable('Fira Code', machineWith([]))).toBe(false);
-    expect(isFontAvailable('Fira Code', machineWith(['Fira Mono']))).toBe(false);
+    expect(isFontAvailable('FiraCode Nerd Font Mono', machineWith([]))).toBe(false);
+    expect(isFontAvailable('FiraCode Nerd Font Mono', machineWith(['Fira Mono']))).toBe(false);
   });
 
   /**
@@ -39,9 +39,9 @@ test.describe('isFontAvailable', () => {
    */
   test('a family matching one generic exactly is still found through another', () => {
     const metricTwin = (_text: string, font: string) => {
-      if (font.includes('"Fira Code"')) return 100;
+      if (font.includes('"FiraCode Nerd Font Mono"')) return 100;
       return font.endsWith('monospace') ? 100 : 110;
     };
-    expect(isFontAvailable('Fira Code', metricTwin)).toBe(true);
+    expect(isFontAvailable('FiraCode Nerd Font Mono', metricTwin)).toBe(true);
   });
 });

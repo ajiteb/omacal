@@ -2135,9 +2135,9 @@ test.describe('Header', () => {
     }));
     expect(systemFace.variable).toBe('');
     expect(systemFace.data).toBeNull();
-    expect(systemFace.drawn).not.toContain('Fira Code');
+    expect(systemFace.drawn).not.toContain('FiraCode Nerd Font Mono');
 
-    await modal.getByRole('radio', { name: 'Fira Code' }).check();
+    await modal.getByRole('radio', { name: 'FiraCode Nerd Font Mono' }).check();
     await expect.poll(() => page.evaluate(() =>
       (window as any).__harness.settingValues('appearancePreferences').length,
     )).toBe(1);
@@ -2153,19 +2153,19 @@ test.describe('Header', () => {
       drawn: getComputedStyle(document.body).fontFamily,
     }));
     expect(firaFace.data).toBe('fira-code');
-    expect(firaFace.variable).toContain('Fira Code');
+    expect(firaFace.variable).toContain('FiraCode Nerd Font Mono');
     // The fallback tail is the point of asserting the string: a machine
-    // without Fira Code — CI's browsers, among others — must still end up
+    // without the requested font — CI's browsers, among others — must still end up
     // monospaced rather than back on the system's sans-serif.
     expect(firaFace.variable).toContain('monospace');
-    expect(firaFace.drawn).toContain('Fira Code');
+    expect(firaFace.drawn).toContain('FiraCode Nerd Font Mono');
     expect(firaFace.drawn).toContain('monospace');
 
     // A reopen reads the stub's stored object, so this cannot pass merely
     // because the radio kept the click.
     await page.keyboard.press('Escape');
     modal = await openSettings(page, 'Appearance');
-    await expect(modal.getByRole('radio', { name: 'Fira Code' })).toBeChecked();
+    await expect(modal.getByRole('radio', { name: 'FiraCode Nerd Font Mono' })).toBeChecked();
 
     // And back: `system` is the absence of the property, not a second copy
     // of the system stack to keep in step with `app.css` by hand.
@@ -2177,7 +2177,7 @@ test.describe('Header', () => {
   });
 
   /**
-   * Nothing is bundled, so "Fira Code" is a request the machine can refuse
+   * Nothing is bundled, so "FiraCode Nerd Font Mono" is a request the machine can refuse
    * in silence — CSS draws the fallback and says nothing about it. The tab
    * says it instead, and only while that choice is in force: the warning is
    * about what is on screen now, not a standing advertisement for a font.
@@ -2189,18 +2189,18 @@ test.describe('Header', () => {
    * rule the modal asked (`isFontAvailable`, pinned in `fontcheck.spec.ts`)
    * and holds the tab to that answer, in both directions.
    */
-  test('a missing Fira Code is named rather than silently fallen back from', async ({ page }) => {
+  test('a missing FiraCode Nerd Font Mono is named rather than silently fallen back from', async ({ page }) => {
     await page.goto(show('Header', 'connected'));
     const modal = await openSettings(page, 'Appearance');
-    const warning = modal.getByText("Fira Code isn't installed here");
+    const warning = modal.getByText("FiraCode Nerd Font Mono isn't installed here");
     const installed = await page.evaluate(() => (window as any).__fontcheck.firaCodeInstalled());
 
     // Never while the system face is in force, whatever this machine has:
     // the warning describes the calendar on screen, and that one is not
-    // asking for Fira Code at all.
+    // asking for FiraCode Nerd Font Mono at all.
     await expect(warning).toHaveCount(0);
 
-    await modal.getByRole('radio', { name: 'Fira Code' }).check();
+    await modal.getByRole('radio', { name: 'FiraCode Nerd Font Mono' }).check();
     if (installed) await expect(warning).toHaveCount(0);
     else await expect(warning).toBeVisible();
 
