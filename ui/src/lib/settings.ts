@@ -144,8 +144,7 @@ export type AppSettings = {
   eventTransparency: number;
   /** The shared corner treatment for every event representation. */
   eventCornerStyle: EventCornerStyle;
-  /** The typeface the window is set in. `'system'` until chosen; nothing is
-   *  bundled, so `'fira-code'` asks for a family the machine has. */
+  /** The platform default or Omarchy's default terminal font. */
   fontFamily: FontFamily;
   /** Whether the window can be seen through at all: true on Linux, whose
    *  window has a transparent backing store, false on macOS, whose does not.
@@ -368,4 +367,3 @@ export const setDisplayTimezone = (tz: string | null) =>
  *  that is what `sync_loop` compares against a clock. */
 export const minutesOf = (ms: number): number => Math.round(ms / 60_000);
 export const msOfMinutes = (min: number): number => Math.round(min * 60_000);
-

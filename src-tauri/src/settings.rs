@@ -303,29 +303,23 @@ impl EventCornerStyle {
     }
 }
 
-/// Which typeface the calendar window is set in.
+/// The platform-default typeface or Omarchy's default terminal typeface.
 ///
-/// Typed for [`EventCornerStyle`]'s reason, and read back the same way: an
-/// unrecognised row falls to `System`, the face every install already wore.
-///
-/// Nothing is bundled. `FiraCode` requests FiraCode Nerd Font Mono, a family
-/// the *machine* has — the UI asks for it ahead of a monospace fallback
-/// chain, so an install without it still reads in a monospace face rather
-/// than in something unreadable, and the settings tab says so when it cannot
-/// find the real one.
+/// Unknown rows fall back to `Default`. Omarchy's font is not bundled and
+/// uses a monospace fallback when it is unavailable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FontFamily {
-    #[serde(rename = "system")]
+    #[serde(rename = "default")]
+    Default,
+    #[serde(rename = "omarchy")]
     System,
-    #[serde(rename = "fira-code")]
-    FiraCode,
 }
 
 impl FontFamily {
     fn as_str(self) -> &'static str {
         match self {
-            FontFamily::System => "system",
-            FontFamily::FiraCode => "fira-code",
+            FontFamily::Default => "default",
+            FontFamily::System => "omarchy",
         }
     }
 }
@@ -989,12 +983,10 @@ pub(crate) async fn read_settings_with(pool: &SqlitePool, baseline: u8) -> AppSe
             Some("square") => EventCornerStyle::Square,
             _ => EventCornerStyle::Rounded,
         },
-        // Absent, garbage and a spelling only a future version writes all
-        // land on the system face, `event_corner_style`'s rule: a row nobody
-        // here understands must not leave the window in a face nobody chose.
+        // Unknown rows use the platform font, not a font nobody chose.
         font_family: match read(pool, FONT_FAMILY_KEY).await.as_deref() {
-            Some("fira-code") => FontFamily::FiraCode,
-            _ => FontFamily::System,
+            Some("omarchy") => FontFamily::System,
+            _ => FontFamily::Default,
         },
         // `== "12h"` rather than `!= "24h"`, the same polarity `list_mode`
         // takes and for the same reason: absent, garbage, and a value written
@@ -1876,8 +1868,11 @@ mod tests {
         assert!(matches!(
             read(json!({"key": "appearancePreferences", "value": {
                 "backgroundTransparency": 10.0, "eventTransparency": 5.0, "eventCornerStyle": "square",
-                "fontFamily": "fira-code"}})),
-            Setting::AppearancePreferences { inactive_background_transparency: None, .. }
+                "fontFamily": "omarchy"}})),
+            Setting::AppearancePreferences {
+                font_family: FontFamily::System,
+                ..
+            }
         ));
         assert!(matches!(
             read(json!({"key": "menubarPreferences", "value": {"dayView": true, "label": false, "joinMinutes": 5}})),
@@ -2031,8 +2026,8 @@ mod tests {
         );
         assert_eq!(
             s.font_family,
-            FontFamily::System,
-            "the face every install already wore until somebody picks another",
+            FontFamily::Default,
+            "the face every install already wore until somebody picks Omarchy's system font",
         );
         assert_eq!(
             s.time_format,
@@ -2264,13 +2259,13 @@ mod tests {
     async fn appearance_round_trips_as_one_choice_and_rejects_bad_percentages() {
         let p = pool().await;
 
-        let s = set(&p, Setting::AppearancePreferences { background_transparency: 35.0, event_transparency: 20.0, event_corner_style: EventCornerStyle::Square, font_family: FontFamily::FiraCode, inactive_background_transparency: None })
+        let s = set(&p, Setting::AppearancePreferences { background_transparency: 35.0, event_transparency: 20.0, event_corner_style: EventCornerStyle::Square, font_family: FontFamily::System, inactive_background_transparency: None })
             .await
             .unwrap();
         assert_eq!(s.background_transparency, 35.0);
         assert_eq!(s.event_transparency, 20.0);
         assert_eq!(s.event_corner_style, EventCornerStyle::Square);
-        assert_eq!(s.font_family, FontFamily::FiraCode);
+        assert_eq!(s.font_family, FontFamily::System);
 
         for (background, events) in [(50.1, 20.0), (35.0, 25.1)] {
             let err = set(&p, Setting::AppearancePreferences { background_transparency: background, event_transparency: events, event_corner_style: EventCornerStyle::Rounded, font_family: FontFamily::System, inactive_background_transparency: None })
@@ -2283,7 +2278,7 @@ mod tests {
             assert_eq!(unchanged.event_corner_style, EventCornerStyle::Square);
             // The whole tuple is one decision: a refused percentage must not
             // have taken the typeface from it on its way out.
-            assert_eq!(unchanged.font_family, FontFamily::FiraCode);
+            assert_eq!(unchanged.font_family, FontFamily::System);
         }
     }
 
@@ -2371,13 +2366,13 @@ mod tests {
             );
         }
 
-        write(&p, FONT_FAMILY_KEY, "fira-code").await.unwrap();
-        assert_eq!(read_settings(&p).await.font_family, FontFamily::FiraCode);
-        for stored in ["", "FiraCode", "firaCode", "monospace", "future-face"] {
+        write(&p, FONT_FAMILY_KEY, "omarchy").await.unwrap();
+        assert_eq!(read_settings(&p).await.font_family, FontFamily::System);
+        for stored in ["", "system", "future-face"] {
             write(&p, FONT_FAMILY_KEY, stored).await.unwrap();
             assert_eq!(
                 read_settings(&p).await.font_family,
-                FontFamily::System,
+                FontFamily::Default,
                 "{stored:?} is not a face this version writes",
             );
         }
@@ -2413,7 +2408,7 @@ mod tests {
     /// the same string the form picked.
     #[test]
     fn the_font_familys_stored_spelling_is_its_wire_spelling() {
-        for face in [FontFamily::System, FontFamily::FiraCode] {
+        for face in [FontFamily::Default, FontFamily::System] {
             assert_eq!(
                 serde_json::to_string(&face).unwrap(),
                 format!("\"{}\"", face.as_str()),

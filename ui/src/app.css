@@ -9,11 +9,8 @@
    gradients off var(--muted), so it follows the theme. */
 
 /* The window's typeface, and the one declaration the font setting moves.
-   `--app-font-family` is set by `appearance.ts` only for a chosen face;
-   unset is the stack below, which is what `'system'` means and what every
-   install wore before the setting existed. Nothing is bundled — see
-   `FIRA_CODE_STACK` for why a request the machine cannot honour still lands
-   somewhere monospaced.
+   `--app-font-family` is set by `appearance.ts` only for Omarchy's System
+   choice; unset leaves the platform default font in place.
 
    Here rather than in `App.svelte` for the reason above this: the component
    harness mounts a component without App, and a settings tab that previewed

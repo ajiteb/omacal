@@ -18,7 +18,6 @@ import * as responses from '../../src/lib/responses.svelte';
 import * as eventform from '../../src/lib/eventform';
 import * as drag from '../../src/lib/drag';
 import * as taskdates from '../../src/lib/taskdates';
-import * as fontcheck from '../../src/lib/fontcheck';
 import { FIXTURES } from '../fixtures';
 import { installTauriStub } from './tauri';
 import { setPalette } from '../../src/lib/theme';
@@ -42,12 +41,6 @@ import { VIEW_BOX_CSS } from './viewbox';
 // answer it gives depends on the browser's zone, and `timezoneId` reaches the
 // browser context rather than Node.
 (window as any).__drag = drag;
-
-// The font detection, reachable for the same kind of reason: whether a
-// family is installed is a fact about the *browser* running the spec, and
-// the settings tab's warning turns on it. A spec asks this the way the modal
-// does rather than hard-coding what the test host happens to have.
-(window as any).__fontcheck = fontcheck;
 
 // The task date rules, for `__drag`'s reason: the quick answers are civil
 // days, and only a page in a zone with a clock change can tell.

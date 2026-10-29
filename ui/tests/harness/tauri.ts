@@ -791,7 +791,7 @@ const DEFAULT_SETTINGS: StubSettings = {
   eventCornerStyle: 'rounded',
   // The face every install wears until somebody picks the other one, so
   // every committed screenshot golden goes on describing the same pixels.
-  fontFamily: 'system',
+  fontFamily: 'default',
   transparentWindow: true,
   listMode: false,
   combineIdenticalEvents: false,

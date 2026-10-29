@@ -1,9 +1,14 @@
 /** The appearance fields shared by startup, Settings' live preview, and IPC. */
 export type EventCornerStyle = "rounded" | "square";
 
-/** Which typeface the calendar window is set in. Nothing is bundled: both
- *  values name families the machine already has. */
-export type FontFamily = "system" | "fira-code";
+/** The platform default, or Omarchy's default terminal family. */
+export type FontFamily = "default" | "omarchy";
+
+/** The typefaces offered in Settings, in display order. */
+export const FONT_FAMILY_OPTIONS: ReadonlyArray<[FontFamily, string]> = [
+  ["default", "Default"],
+  ["omarchy", "System"],
+];
 
 export type AppearancePreferences = {
   backgroundTransparency: number;
@@ -13,17 +18,8 @@ export type AppearancePreferences = {
   fontFamily: FontFamily;
 };
 
-/**
- * The stack `fira-code` asks for, most specific first.
- *
- * FiraCode Nerd Font Mono is not shipped with omacal. The requested family
- * comes first, followed by related Fira faces and platform monospace faces
- * so a missing install still gets a monospaced calendar rather than
- * silently landing back on the system's sans-serif.
- */
-export const FIRA_CODE_STACK =
-  "'FiraCode Nerd Font Mono', 'FiraCode Nerd Font', 'Fira Code', 'Fira Mono', " +
-  "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
+const OMARCHY_FONT_STACK =
+  "'JetBrainsMono Nerd Font', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace";
 
 const current = new WeakMap<HTMLElement, AppearancePreferences>();
 const focused = new WeakMap<HTMLElement, boolean>();
@@ -99,14 +95,11 @@ export function applyAppearance(
     root.style.removeProperty("--event-pill-radius");
   }
 
-  // One variable, read by `body`'s own `font-family` with the system stack
-  // as its fallback — so `system` is the absence of the property rather than
-  // a second copy of that stack to keep in step. Everything else in the app
-  // inherits or says `font: inherit`, which is why no component needs to
-  // know this setting exists.
-  if (preferences.fontFamily === "fira-code") {
-    root.dataset.fontFamily = "fira-code";
-    root.style.setProperty("--app-font-family", FIRA_CODE_STACK);
+  // Default leaves the app's platform font stack untouched. Omarchy's
+  // System choice uses the font Omarchy configures for its terminal.
+  if (preferences.fontFamily === "omarchy") {
+    root.dataset.fontFamily = "omarchy";
+    root.style.setProperty("--app-font-family", OMARCHY_FONT_STACK);
   } else {
     delete root.dataset.fontFamily;
     root.style.removeProperty("--app-font-family");
