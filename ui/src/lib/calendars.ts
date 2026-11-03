@@ -25,6 +25,9 @@ export type Calendar = {
    *  `reader`, `freeBusyReader`. Only the first two can be written to — see
    *  `writableCalendars` below, the one place that decides it. */
   access_role: string;
+  /** Takes events at all. Always true for Google; a CalDAV collection can be
+   *  tasks-only (an iCloud Reminders list). See `writableCalendars`. */
+  supports_events: boolean;
   /** The owning account's provider: `google` | `caldav` | `webcal` | `local`.
    *  Only Google mails guests (CalDAV has no guest management and no notify
    *  question; WebCal and local never mail) — `EventForm` gates on this field,
@@ -35,9 +38,12 @@ export type Calendar = {
 /** The two roles a create can land on. Google's `calendarList` reports two more
  *  — `reader` and `freeBusyReader` — and a subscribed holiday calendar is a
  *  `reader`, so a list that is not filtered offers Save buttons the backend can
- *  only refuse (`create_impl`'s own `can_edit` check, against the same column). */
+ *  only refuse (`create_impl`'s own `can_edit` check, against the same column).
+ *  A tasks-only collection is left out for the same reason: iCloud's Reminders
+ *  lists are `owner`, so the role alone offered them, and a create there is a
+ *  PUT iCloud can only refuse. */
 export const writableCalendars = (cals: Calendar[]) =>
-  cals.filter((c) => c.access_role === 'owner' || c.access_role === 'writer');
+  cals.filter((c) => c.supports_events && (c.access_role === 'owner' || c.access_role === 'writer'));
 
 /**
  * `wanted` if a create could land on it, otherwise the first calendar one
@@ -92,6 +98,10 @@ export const calendarInk = (color: string | null | undefined): string => color |
 export const getCalendars = () => invoke<Calendar[]>('get_calendars');
 export const setCalendarSelected = (id: number, on: boolean) =>
   invoke<void>('set_calendar_selected', { id, on });
+/** Shows exactly `ids` and hides every other calendar whose box can be
+ *  ticked (`sync_enabled`), in one transaction: a calendar group's apply, and
+ *  the list's Hide all / Show all. Display only, like a row's box. */
+export const setCalendarsShown = (ids: number[]) => invoke<void>('set_calendars_shown', { ids });
 /** Resolves to the number of local events the removal deleted. */
 export const setCalendarSync = (id: number, on: boolean) =>
   invoke<number>('set_calendar_sync', { id, on });

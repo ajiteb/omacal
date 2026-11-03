@@ -1,6 +1,6 @@
 ---
 name: omacal
-description: The user's real calendar (Google, iCloud, CalDAV, WebCal subscriptions) through the omacal CLI — today's agenda, events in a date range, title search, the calendar list, and (v0.7+) writes: create (one-off or repeating), reschedule, answer and delete events. Use whenever the user asks what is on their calendar, when they are free or busy, or asks to add, move, cancel or answer a meeting from the terminal.
+description: The user's real calendar (Google, iCloud, CalDAV, WebCal subscriptions) through the omacal CLI — today's agenda, events in a date range, title search, the calendar list, and (v0.7+) writes, to create (one-off or repeating), reschedule, answer and delete events. Use whenever the user asks what is on their calendar, when they are free or busy, or asks to add, move, cancel or answer a meeting from the terminal.
 ---
 
 # omacal calendar
@@ -23,7 +23,9 @@ omacal events show 41 --json         # ONE event whole (v0.7.4+): the guest
 omacal search quarterly review --json   # event AND task titles (v5.3+): events
                                      # nearest first, open tasks by due date;
                                      # --json answers {"events":[…],"tasks":[…]}
-omacal calendars --json              # every calendar with ids
+omacal calendars --json              # every calendar with ids; one with
+                                     # supports_events false is a task list
+                                     # and takes no events
 omacal weather --json                # the app's forecast (v2.2+): place +
                                      # how it was decided, now, eight days
 omacal tasks --json                  # what still needs doing (v2.3+), with
@@ -98,6 +100,7 @@ omacal events create --title "Standup" --date 2026-09-14 --start 09:00 --end 09:
 omacal events update 41 --occurrence 1786352400000 --start 10:00 --end 10:30 --json
 omacal events delete 41 --occurrence 1786352400000 --json
 omacal events respond 41 yes --json          # yes | maybe | no
+omacal events respond 41 no --keep-meeting --json   # own meeting: out, not off
 ```
 
 - `41` and the `--occurrence` value are `events list --json`'s own
@@ -114,6 +117,14 @@ omacal events respond 41 yes --json          # yes | maybe | no
  - `delete` takes no `--notify`. On Google it tells the guests, or for an
    own-copy event it removes the event from the user's calendar only and
    Google tells the organizer they declined. Off Google OmaCal emails nobody.
+ - **A No on the user's own meeting (`organizer: true`) is refused (exit 2)
+   until you say which they meant.** Google emails a guest's No to the
+   organizer, so when the organizer says No nobody is told and the meeting
+   stays on everyone else's calendar. "It's off" and "I'm out" are different
+   requests: ask the user. To call it off, `events delete` (Google emails
+   the guests a cancellation). To mark them out and leave it on for the
+   others, `respond ID no --keep-meeting`. Never tell the user the others
+   "have been told" after a `respond`.
  - `--guest a@b` repeats for multiple guests on create. Creating with
    guests also requires `--notify`, except off Google.
 - **`--repeat daily|weekdays|weekly|monthly|yearly` makes one series instead

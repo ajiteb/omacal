@@ -85,7 +85,10 @@ Panel {
     meetingWindows = current
     if (joinIntent && nowMs - joinIntent.at > 90000) joinIntent = null
   }
-  readonly property var barEvent: callEvent || runningEvent || nextEvent
+  // A meeting you can join or are in, else the next one if it is within the
+  // label's horizon (#167): a day unless chosen, so a quiet week leaves the bar.
+  readonly property var barEvent: callEvent || runningEvent
+    || (Timeline.withinLabelHorizon(nextEvent, nowMs, day ? day.label_hours : undefined) ? nextEvent : null)
   readonly property bool showLabel: !barVertical && (!day || day.label) && !!barEvent
   readonly property string barLabel: {
     if (!barEvent) return ""
@@ -176,6 +179,13 @@ Panel {
     if (!feed) return "Waiting for OmaCal"
     if (empty) return "Nothing scheduled"
     return ""
+  }
+
+  // The mark, the date and the title answer clicks alike.
+  function barPressed(buttonCode) {
+    if (buttonCode === Qt.LeftButton) root.toggle()
+    else if (buttonCode === Qt.RightButton) root.openApp("--quick-add")
+    else if (buttonCode === Qt.MiddleButton) root.openApp()
   }
 
   // `ymd` is a generated date or the fixed --quick-add action;
@@ -277,7 +287,8 @@ Panel {
   // setup, widget on and tray off, cannot exist. Whether this widget is in
   // the bar at all is the shell's decision, in its own bar settings, the same
   // as every other widget here.
-  implicitWidth: button.implicitWidth + (barJoin.visible ? barJoin.implicitWidth : 0) + (barTitle.visible ? barTitle.implicitWidth : 0)
+  implicitWidth: button.implicitWidth + (barDate.visible ? barDate.implicitWidth : 0)
+    + (barJoin.visible ? barJoin.implicitWidth : 0) + (barTitle.visible ? barTitle.implicitWidth : 0)
   implicitHeight: button.implicitHeight
 
   onOpenedChanged: if (opened) {
@@ -352,50 +363,56 @@ Panel {
     active: root.imminent
     dimmed: !root.appRunning || root.events === null || root.events.length === 0
     tooltipText: root.heroMeta()
-    // Wider only when the date rides along: the slot is the icon's own, and
-    // a button that reserved room for a number nobody asked for would take
-    // panel width from its neighbours. `dateMetrics` measures the glyphs
-    // rather than guessing at them, so "9" and "31" each get what they need.
-    slotSize: Style.bar.iconSlot
-      + (root.showDate ? dateMetrics.width + Style.space(4) : 0)
     // The app's own mark, not a generic glyph: with the tray icon off this
     // is omacal's one presence in the bar. Preserve its orange brand dot.
+    // Only the mark: Omarchy scales an iconComponent to fit the icon size
+    // (2026-10-11, "Normalize bar icon size and alignment"), so text drawn in
+    // here shrinks to a smudge. The date and the title are buttons of their own.
     iconComponent: Component {
       Item {
-        Row {
+        OmacalMark {
           anchors.centerIn: parent
-          spacing: root.showDate || root.showLabel ? Style.space(4) : 0
-          OmacalMark {
-            anchors.verticalCenter: parent.verticalCenter
-            iconSize: Style.space(12)
-            dotColor: "#F97316"
-            color: root.imminent ? root.urgent : button.foreground
-          }
-          Text {
-            textFormat: Text.PlainText
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.showDate
-            text: root.dateText
-            color: root.imminent ? root.urgent : button.foreground
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.body
-            font.weight: Font.DemiBold
-          }
-
+          iconSize: Style.space(12)
+          dotColor: "#F97316"
+          color: root.imminent ? root.urgent : button.foreground
         }
       }
     }
-    onPressed: function(buttonCode) {
-      if (buttonCode === Qt.LeftButton) root.toggle()
-      else if (buttonCode === Qt.RightButton) root.openApp("--quick-add")
-      else if (buttonCode === Qt.MiddleButton) root.openApp()
-    }
+    onPressed: function(buttonCode) { root.barPressed(buttonCode) }
   }
 
-  TextMetrics { id: labelMetrics; text: root.barLabel; font.family: root.fontFamily; font.pixelSize: Style.font.body }
+  // Today's date beside the mark. Only there when the date rides along: a
+  // button that reserved room for a number nobody asked for would take panel
+  // width from its neighbours. `dateMetrics` measures the glyphs rather than
+  // guessing at them, so "9" and "31" each get what they need.
+  WidgetButton {
+    id: barDate
+    anchors.left: button.right
+    anchors.top: parent.top
+    anchors.bottom: parent.bottom
+    bar: root.bar
+    visible: root.showDate
+    labelVisible: false
+    hasVisualContent: root.showDate
+    fixedWidth: dateMetrics.width + Style.space(4)
+    active: root.imminent
+    dimmed: button.dimmed
+    tooltipText: root.heroMeta()
+    Text {
+      anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
+      text: root.dateText
+      color: root.imminent ? root.urgent : barDate.foreground
+      font.family: root.fontFamily
+      font.pixelSize: Style.font.body
+      font.weight: Font.DemiBold
+    }
+    onPressed: function(buttonCode) { root.barPressed(buttonCode) }
+  }
+
   BarIconButton {
     id: barJoin
-    anchors.left: button.right
+    anchors.left: barDate.visible ? barDate.right : button.right
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     bar: root.bar
@@ -468,36 +485,21 @@ Panel {
     onPressed: root.joinCall()
   }
 
-  BarIconButton {
+  // A text button, not an icon one: WidgetButton draws its label at the
+  // bar's own size, plain text, in the urgent colour while `active`.
+  WidgetButton {
     id: barTitle
-    anchors.left: barJoin.visible ? barJoin.right : button.right
+    anchors.left: barJoin.visible ? barJoin.right : barDate.visible ? barDate.right : button.right
     anchors.top: parent.top
     anchors.bottom: parent.bottom
     bar: root.bar
     visible: root.showLabel
+    text: root.barLabel
+    fontFamily: root.fontFamily
     active: root.imminent
     dimmed: !root.appRunning
-    slotSize: labelMetrics.advanceWidth + Style.space(8)
     tooltipText: root.heroMeta()
-    iconComponent: Component {
-      Item {
-      Text {
-        anchors.centerIn: parent
-        textFormat: Text.PlainText
-        width: labelMetrics.advanceWidth
-        text: root.barLabel
-        elide: Text.ElideRight
-        font.family: root.fontFamily
-        font.pixelSize: Style.font.body
-        color: root.imminent ? root.urgent : barTitle.foreground
-      }
-      }
-    }
-    onPressed: function(buttonCode) {
-      if (buttonCode === Qt.LeftButton) root.toggle()
-      else if (buttonCode === Qt.RightButton) root.openApp("--quick-add")
-      else if (buttonCode === Qt.MiddleButton) root.openApp()
-    }
+    onPressed: function(buttonCode) { root.barPressed(buttonCode) }
   }
 
   // Off-screen, and only to measure: the button's width has to be known

@@ -8,7 +8,7 @@
   import { overlayWeek, overlayMonth, overlayBigYear, overlayDetail, isUnsaved, type PendingChange } from './lib/pendingview';
   import { landedButNotStored, storeHoldsShift } from './lib/pendingqueue';
   import { createChange, editChange } from './lib/pendingedit';
-  import { applyVisibleHours } from './lib/visiblehours.svelte';
+  import { applyVisibleHours, visibleHours } from './lib/visiblehours.svelte';
   import { applyHideWeekends, hideWeekends } from './lib/hideweekends.svelte';
   import type { EventCopy } from './lib/api';
   import { formatDate } from './lib/datefmt';
@@ -33,6 +33,7 @@
   import { isIcs } from './lib/importics';
   import { changedMeetings, declinedGuests, pendingInvites } from './lib/invites';
   import { calendarColor, getCalendars, offerableCalendarId, setCalendarSelected, type Calendar } from './lib/calendars';
+  import { applyCalendarGroup, groupIndexForCode, saveCalendarGroups, type CalendarGroup } from './lib/calendargroups';
   import {
     createEvent, deleteEvent, getEventDetail, updateEvent,
     type EventDetail, type Occurrence, type SendUpdates,
@@ -203,6 +204,8 @@
 
   let status = $state<AppStatus | null>(null);
   let calendars = $state<Calendar[]>([]);
+  /** The saved calendar groups, in switcher order (⌘1–⌘9 count along it). */
+  let calendarGroups = $state<CalendarGroup[]>([]);
   let busy = $state(false);
   let syncing = $state(false);
   let syncInFlight: Promise<unknown> | null = null;
@@ -281,8 +284,11 @@
   // Through `pick`, not a bare assignment, for its Year reseed and its
   // `viewChoices` stamp. Deliberately not wired to `open-date` or a clicked
   // reminder — both name an actual destination, unlike a plain reopen.
+  // Fitted hours open fitted for the same reason: a zoom made over them is
+  // for the while the window is open.
   $effect(() => {
     const un = listen('app-opened', () => {
+      if (visibleHours().fit) weekGrid?.fitAgain();
       void getSettings().then((s) => pick(effectiveDefaultView(s))).catch(() => {});
     });
     return () => { un.then((f) => f()); };
@@ -896,10 +902,11 @@
         loginAsked = s.startOnLoginAsked;
         desktop = s.desktop;
         combineIdenticalEvents = s.combineIdenticalEvents;
+        calendarGroups = s.calendarGroups;
         defaultCalendarId = s.defaultCalendarId;
         defaultEventDurationMinutes = s.defaultEventDurationMinutes;
         setClockFormat(s.timeFormat);
-        applyVisibleHours(s.visibleStartHour, s.visibleEndHour);
+        applyVisibleHours(s.visibleStartHour, s.visibleEndHour, s.visibleHoursFit);
         applyHideWeekends(s.hideWeekends);
         setDateFormat(s.dateFormat);
         setSecondZone(s.secondTimezone);
@@ -955,6 +962,30 @@
       error = `${c.summary} · ${String(err)}`;
     }
     await handleCalendarChange();
+  }
+
+  /** Shows exactly group `i`'s calendars and hides the rest — the header
+   *  switcher's click, a row in Menu → Calendars, and ⌘1–⌘9 alike. The refresh is the one a single toggle
+   *  already runs: the server filters on `selected`, so nothing else moves. */
+  async function applyGroup(i: number) {
+    const group = calendarGroups[i];
+    if (!group) return;
+    try {
+      await applyCalendarGroup(group, calendars);
+    } catch (err) {
+      // No refresh after a refusal or a failure: the reload clears `error`, and
+      // nothing changed (the apply is one transaction) for it to show.
+      error = `${group.name} · ${String(err)}`;
+      return;
+    }
+    await handleCalendarChange();
+  }
+
+  /** Stores the new list and keeps what came back — the stored form, with
+   *  names trimmed. A refusal propagates to the group panel — the header
+   *  switcher's or Menu → Calendars' — which shows it. */
+  async function saveGroups(next: CalendarGroup[]) {
+    calendarGroups = await saveCalendarGroups(next);
   }
 
   async function handleCalendarChange() {
@@ -1730,6 +1761,9 @@
    *  prop, because the form's `value` deliberately stops tracking its props
    *  the moment the user types — see `applySpan`. */
   let formEl = $state<{ applySpan: (s: { startMs: number; endMs: number }) => void } | null>(null);
+  /** The grid, for the keys' zoom over fitted hours: that height is the
+   *  grid's own, since only the grid knows the pane it fits them to. */
+  let weekGrid = $state<{ fitAgain: () => void; zoomFitted: (dir: 1 | -1) => void } | null>(null);
   $effect(() => {
     if (!form) formPreview = null;
   });
@@ -2360,6 +2394,8 @@
     // no-op in Year and Big Year, where the control it duplicates is absent —
     // see `toggleList`.
     list: toggleList,
+    // `X`, what goes in a checkbox (#165). Toggles, as Menu → Tasks… does.
+    tasks: () => (tasksOpen = !tasksOpen),
     help: () => (helpOpen = true),
   };
 
@@ -2390,16 +2426,42 @@
       }
       return;
     }
+    // ⌘1–⌘9 (Ctrl elsewhere) show the Nth saved calendar group. Matched on
+    // `e.code`, not `e.key`: a layout with its own script writes no ASCII
+    // digits on the top row (issue #38, `shortcutKeyFor`). Only the chord —
+    // bare 1–5 are views. Left alone when there is no Nth group, so the key
+    // means whatever the platform says until a group gives it a meaning, and
+    // held back by the same open-panel guards as paste (and by Settings, which
+    // is a dialog) so it cannot swap the calendars out from under a form.
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey) {
+      const n = groupIndexForCode(e.code);
+      if (n !== null) {
+        if (n < calendarGroups.length && !form && !pendingDelete && !searchOpen && !quickAdd && !helpOpen
+            && !document.querySelector('[role="dialog"][aria-modal="true"]')) {
+          e.preventDefault();
+          // A held chord is one apply, not one per auto-repeat.
+          if (!e.repeat) void applyGroup(n);
+        }
+        return;
+      }
+    }
     // Ctrl+= / Ctrl+- / Ctrl+0 zoom the hours in Day and Week — the keyboard's
     // pinch (2026-09-03). `=` as well as `+`, because on the layouts this
     // ships to `+` is Shift-`=`, and browsers have always read either as
     // zoom in; Shift is therefore allowed here alone among the chords. The
     // webview's own zoom hotkeys are off (`zoomHotkeysEnabled: false`), so
     // these keys meant nothing before. Claimed only where a grid is on
-    // screen; anywhere else they still mean nothing.
+    // screen; anywhere else they still mean nothing. With the visible hours
+    // fitted they zoom the grid's own height over them, never the stored
+    // one, and Ctrl+0 fits them again.
     if ((e.ctrlKey || e.metaKey) && !e.altKey && ['=', '+', '-', '0'].includes(e.key)) {
       if ((view === 'day' || view === 'week') && !listMode) {
         e.preventDefault();
+        if (visibleHours().fit) {
+          if (e.key === '0') weekGrid?.fitAgain();
+          else weekGrid?.zoomFitted(e.key === '-' ? -1 : 1);
+          return;
+        }
         hourPx = e.key === '0' ? HOUR_PX_DEFAULT : hourPxStepped(hourPx, e.key === '-' ? -1 : 1);
       }
       return;
@@ -2474,6 +2536,9 @@
     {busy} {error} {calendars} {view} {listMode}
     errorAction={retry && retry.forError === error ? retry : null}
     onToggleList={toggleList}
+    groups={calendarGroups}
+    onapplygroup={applyGroup}
+    onsavegroups={saveGroups}
     onPrev={() => { keyboardActive = false; step(-1); }}
     onNext={() => { keyboardActive = false; step(1); }}
     onToday={() => { keyboardActive = false; goToday(); }}
@@ -2489,10 +2554,11 @@
         combineIdenticalEvents = s.combineIdenticalEvents;
         void reload();
       }
+      calendarGroups = s.calendarGroups;
       defaultCalendarId = s.defaultCalendarId;
       defaultEventDurationMinutes = s.defaultEventDurationMinutes;
       setClockFormat(s.timeFormat);
-      applyVisibleHours(s.visibleStartHour, s.visibleEndHour);
+      applyVisibleHours(s.visibleStartHour, s.visibleEndHour, s.visibleHoursFit);
       applyHideWeekends(s.hideWeekends);
       // Answering in Settings → General is an answer too.
       loginAsked = s.startOnLoginAsked;
@@ -2596,7 +2662,7 @@
                    keyboardCursor={visibleKeyboardCursor}
                    onopen={openGridEvent} />
       {:else}
-        <WeekGrid week={shownWeek} {calendars} {visibleStartMs} visibleDays={visibleCount}
+        <WeekGrid bind:this={weekGrid} week={shownWeek} {calendars} {visibleStartMs} visibleDays={visibleCount}
                   onerror={(m) => (error = m)}
                   {weather} {weatherStale} onweather={openWeather}
                   tasks={weekTasks} ontaskmove={moveTask} ontaskdue={retimeTask} ontasktoggle={completeTask}

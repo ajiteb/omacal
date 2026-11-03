@@ -3,8 +3,8 @@
 //! `omacal events create|update|delete|respond` — parsed here, prechecked
 //! here, and then **executed by the running app** over the socket `ipc.rs`
 //! owns. This module never opens the database for writing; its read-only
-//! pool answers exactly two questions the refusals below need (does this
-//! event repeat, does it have guests), and everything that could change a
+//! pool answers only what the refusals below need (does this event repeat,
+//! who is on it, whose is it), and everything that could change a
 //! calendar happens on the other end of the socket, behind the app's own
 //! guards.
 //!
@@ -12,7 +12,9 @@
 //! never defaults: a recurring event without `--scope` and a guest-touching
 //! write without `--notify` are usage errors with the options named. One
 //! flag is a cheap price; a meeting-cancelled email nobody meant to send is
-//! not.
+//! not. A third joined them later, the other way round: a No on the user's
+//! own meeting, which sends no email at all when one was expected
+//! ([`own_no_rule`]).
 //!
 //! Split as ever: parsing, the rules, the time building and the request
 //! shapes are pure and tested — the request builders are tested through
@@ -95,6 +97,9 @@ pub(crate) struct RespondArgs {
     pub answer: String,
     pub scope: Option<String>,
     pub occurrence: Option<i64>,
+    /// `--keep-meeting`: a No on the user's own meeting is meant as "I'm
+    /// out", not "it's off" — see [`own_no_rule`].
+    pub keep_meeting: bool,
 }
 
 /// `omacal events <verb> …` for the write verbs — `list` stays in `cli.rs`,
@@ -225,6 +230,7 @@ pub(crate) fn parse_events(verb: &str, rest: &[&String]) -> Result<WriteCmd, Str
                 answer,
                 scope: take("--scope")?,
                 occurrence: take("--occurrence")?.map(|v| ms_of("--occurrence", &v)).transpose()?,
+                keep_meeting: flag("--keep-meeting"),
             }))
         }
         other => Err(format!(
@@ -440,6 +446,64 @@ pub(crate) fn respond_scope_for(asked: Option<&str>) -> Result<&'static str, Str
         Some("this") => Ok("this"),
         Some(other) => Err(format!("--scope takes this|all here, not \"{other}\"")),
     }
+}
+
+/// An address Google minted for a room or a calendar rather than a person —
+/// the UI's `isMachineAddress`, matched on the exact domain for the same
+/// reason it is there: a suffix match accepts look-alikes.
+fn is_machine_address(email: &str) -> bool {
+    email.rsplit_once('@').is_some_and(|(_, domain)| {
+        matches!(
+            domain.trim().to_ascii_lowercase().as_str(),
+            "group.calendar.google.com" | "resource.calendar.google.com"
+        )
+    })
+}
+
+/// Who a No on the user's own meeting leaves expecting them, by name: the
+/// other people on it, minus anyone who already declined and the rooms. The
+/// UI's `leftOutByYourNo` (`owndecline.ts`) counts the same way.
+pub(crate) fn left_out_by_your_no(attendees: &[omacal_store::Attendee]) -> Vec<String> {
+    attendees
+        .iter()
+        .filter(|a| !a.is_self && a.response_status != "declined" && !is_machine_address(&a.email))
+        .map(|a| a.display_name.clone().unwrap_or_else(|| a.email.clone()))
+        .collect()
+}
+
+/// The third never-guess refusal (2026-10-26): a No on the user's own
+/// Google meeting. Google mails a guest's No to the organizer, so when the
+/// organizer says it nobody is told and the meeting stays on everyone
+/// else's calendar — Plamen declined his own 1:1 that way and Teodor still
+/// expected it. "It's off" and "I'm out" are different requests, so the
+/// caller names one: `events delete` (Google mails the cancellation) or
+/// `--keep-meeting`. A guest's No, a calendar that mails nobody, and a
+/// meeting with no one else left to expect it pass untouched.
+pub(crate) fn own_no_rule(
+    response: &str,
+    reach: crate::events::Reach,
+    mails_guests: bool,
+    left_out: &[String],
+    keep_meeting: bool,
+    cancel_command: &str,
+) -> Result<(), String> {
+    if response != "declined"
+        || reach != crate::events::Reach::Organizer
+        || !mails_guests
+        || left_out.is_empty()
+        || keep_meeting
+    {
+        return Ok(());
+    }
+    let whose = match left_out {
+        [one] => format!("{one}'s calendar"),
+        many => format!("{} other people's calendars", many.len()),
+    };
+    Err(format!(
+        "you organise this meeting, so a No only changes your own answer: Google tells nobody \
+         and it stays on {whose}. To call it off for them, `{cancel_command}` — Google emails \
+         them the cancellation. To mark yourself out and leave it on, add --keep-meeting"
+    ))
 }
 
 // ---- Time building, in an explicit zone so a test can pin one ------------
@@ -683,6 +747,8 @@ fn finish(json: bool, envelope: serde_json::Value, done_word: &str) -> i32 {
 struct Target {
     recurring: bool,
     has_other_guests: bool,
+    /// See [`left_out_by_your_no`]; read by [`own_no_rule`] alone.
+    left_out: Vec<String>,
     /// Who a change reaches (`events::Reach`): for a guest's own copy the
     /// notify rule has nobody to apply to, and says so instead of demanding
     /// an answer.
@@ -728,6 +794,7 @@ async fn target(pool: &SqlitePool, id: i64) -> Result<Target, String> {
         // nobody whatever the flag says, and `mailableGuests` upstream
         // counts the same way.
         has_other_guests: event.attendees.iter().any(|a| !a.is_self),
+        left_out: left_out_by_your_no(&event.attendees),
         all_day: event.is_all_day,
         start_ms: event.start_utc,
         end_ms: event.end_utc,
@@ -887,6 +954,20 @@ pub(crate) async fn execute(pool: &SqlitePool, cmd: &WriteCmd, json: bool) -> i3
                 return refuse("--scope this needs --occurrence — which time do you mean?");
             }
             let occurrence = args.occurrence.unwrap_or(t.start_ms);
+            // The delete that calls it off. A series names its scope and, with
+            // no --occurrence given, leaves MS to fill in: the series' own
+            // start is the first occurrence, never a safe guess for "this one".
+            let cancel = if t.recurring {
+                let ms = args.occurrence.map_or("MS".to_string(), |o| o.to_string());
+                format!("omacal events delete {} --occurrence {ms} --scope this|following|all", args.id)
+            } else {
+                format!("omacal events delete {} --occurrence {occurrence}", args.id)
+            };
+            if let Err(m) =
+                own_no_rule(response, t.reach, t.mails_guests, &t.left_out, args.keep_meeting, &cancel)
+            {
+                return refuse(&m);
+            }
             (respond_request(args.id, response, scope, occurrence), "Answered")
         }
     };
@@ -1058,6 +1139,77 @@ mod tests {
         assert!(scope_for(true, Some("weekly")).is_err());
         assert_eq!(scope_for(false, None).unwrap(), "this");
         assert!(scope_for(false, Some("all")).unwrap_err().contains("does not repeat"));
+    }
+
+    #[test]
+    fn respond_takes_keep_meeting_as_a_bare_flag() {
+        match parse("respond", "41 no --keep-meeting").unwrap() {
+            WriteCmd::Respond(a) => {
+                assert_eq!(a.answer, "no", "the flag is not mistaken for the answer");
+                assert!(a.keep_meeting);
+            }
+            other => panic!("{other:?}"),
+        }
+        match parse("respond", "41 no").unwrap() {
+            WriteCmd::Respond(a) => assert!(!a.keep_meeting),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    fn person(email: &str, name: Option<&str>, response: &str, is_self: bool) -> omacal_store::Attendee {
+        omacal_store::Attendee {
+            email: email.into(),
+            display_name: name.map(String::from),
+            response_status: response.into(),
+            optional: false,
+            is_self,
+            comment: None,
+            additional_guests: 0,
+        }
+    }
+
+    /// The people a No on your own meeting leaves expecting you — the UI's
+    /// `leftOutByYourNo` table, minus the two gates `own_no_rule` reads off
+    /// the event itself.
+    #[test]
+    fn left_out_counts_the_people_still_expecting_the_meeting() {
+        let attendees = [
+            person("me@x.com", None, "accepted", true),
+            person("teodor@x.com", Some("Teodor"), "accepted", false),
+            person("ivan@x.com", None, "needsAction", false),
+            person("zoe@x.com", Some("Zoe"), "declined", false),
+            person("c_4a@resource.calendar.google.com", Some("Room 4A"), "accepted", false),
+            person("c_e1@group.calendar.google.com", None, "accepted", false),
+        ];
+        assert_eq!(left_out_by_your_no(&attendees), ["Teodor", "ivan@x.com"]);
+    }
+
+    /// The organizer's No (2026-10-26, Plamen's 1:1 with Teodor): Google
+    /// mails a guest's No to the organizer, and an organizer's own No to
+    /// nobody. So it is refused until the caller says which they meant —
+    /// the meeting off for everyone (delete) or only for them.
+    #[test]
+    fn your_own_no_is_refused_until_the_meeting_is_said_to_stay() {
+        use crate::events::Reach;
+        let teodor = ["Teodor".to_string()];
+        let hint = "omacal events delete 41 --occurrence 1793019600000";
+        let err = own_no_rule("declined", Reach::Organizer, true, &teodor, false, hint).unwrap_err();
+        assert!(err.contains("you organise this"), "{err}");
+        assert!(err.contains("Teodor's calendar"), "{err}");
+        assert!(err.contains(hint), "names the cancel: {err}");
+        assert!(err.contains("--keep-meeting"), "names the way through: {err}");
+
+        let three = ["Ana".to_string(), "Ivan".to_string(), "Petya".to_string()];
+        let err = own_no_rule("declined", Reach::Organizer, true, &three, false, hint).unwrap_err();
+        assert!(err.contains("3 other people's calendars"), "{err}");
+
+        assert!(own_no_rule("declined", Reach::Organizer, true, &teodor, true, hint).is_ok(), "said");
+        assert!(own_no_rule("accepted", Reach::Organizer, true, &teodor, false, hint).is_ok());
+        assert!(own_no_rule("tentative", Reach::Organizer, true, &teodor, false, hint).is_ok());
+        assert!(own_no_rule("declined", Reach::OwnCopy, true, &teodor, false, hint).is_ok(), "a guest");
+        assert!(own_no_rule("declined", Reach::Shared, true, &teodor, false, hint).is_ok(), "a guest");
+        assert!(own_no_rule("declined", Reach::Organizer, false, &teodor, false, hint).is_ok(), "CalDAV");
+        assert!(own_no_rule("declined", Reach::Organizer, true, &[], false, hint).is_ok(), "nobody else");
     }
 
     /// A guest's own copy: the flag is unnecessary, `none` is accepted as

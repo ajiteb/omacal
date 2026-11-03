@@ -71,11 +71,14 @@ WRITES (the running app executes them, through its own guards)
          [--start HH:MM] [--end HH:MM] [--location L] [--description TEXT]
          [--scope this|following|all] [--notify all|none] [--json]
   omacal events delete ID --occurrence MS [--scope this|following|all] [--json]
-  omacal events respond ID yes|maybe|no [--scope this|all] [--occurrence MS] [--json]
+  omacal events respond ID yes|maybe|no [--scope this|all] [--occurrence MS]
+         [--keep-meeting] [--json]
 
   ID and MS are `events list --json`'s own eventId and startMs. Times read
   in omacal's display zone. A repeating event needs --scope said out loud;
   an event with guests needs --notify said out loud — neither is guessed.
+  A No on your own meeting tells nobody, so it needs either `events delete`
+  (which cancels it for everyone) or --keep-meeting (you are out, it stays).
 
   --repeat is the app form's own vocabulary, not an RRULE. Without it a
   create makes one event, as it always has. --days refines a weekly cadence
@@ -177,8 +180,8 @@ pub(crate) fn command_catalog() -> Vec<CommandInfo> {
             description: "delete at a scope, through the app",
             flags: &["--occurrence", "--scope", "--json"] },
         CommandInfo { name: "events respond", usage: "events respond ID yes|maybe|no", writes: true,
-            description: "answer an invitation",
-            flags: &["--scope", "--occurrence", "--json"] },
+            description: "answer an invitation; a No on your own meeting needs --keep-meeting",
+            flags: &["--scope", "--occurrence", "--keep-meeting", "--json"] },
         CommandInfo { name: "search", usage: "search <query>", writes: false,
             description: "event and task titles; events nearest first, tasks by due date",
             flags: &["--json"] },

@@ -78,6 +78,7 @@ export const SHORTCUTS = [
   { id: 'create',   key: 'n', label: 'n', group: 'Doing things', consumes: true },
   { id: 'quickCreate', key: 'q', label: 'q', group: 'Doing things', consumes: true },
   { id: 'list',     key: 'f', label: 'f', group: 'Doing things' },
+  { id: 'tasks',    key: 'x', label: 'x', group: 'Doing things' },
   { id: 'help',     key: '?', label: '?', group: 'Doing things' },
 ] as const satisfies readonly Shortcut[];
 
@@ -115,6 +116,7 @@ export const SHORTCUT_TEXT: Record<ShortcutId, string> = {
   deleteSelected: 'Delete the selected event (asks first)',
   create: 'New event',
   list: 'Switch between the grid and the list',
+  tasks: 'Show or hide Tasks',
   help: 'This list',
 };
 
@@ -150,6 +152,8 @@ export const CHORDS: { label: string; text: string; hint?: string }[] = [
     hint: 'Day and Week — a trackpad pinch or Ctrl+scroll over the grid does the same' },
   { label: `${MOD_LABEL} -`, text: 'Shorter hours' },
   { label: `${MOD_LABEL} 0`, text: 'Hours back to their usual height' },
+  { label: `${MOD_LABEL} 1–9`, text: 'Show a saved calendar group',
+    hint: 'the Nth group in the header switcher — it shows those calendars and hides the rest' },
   { label: `${ALT_LABEL} drag`, text: 'Create over an existing event',
     hint: 'Day and Week — hold the key before dragging to select a new time range' },
 ];

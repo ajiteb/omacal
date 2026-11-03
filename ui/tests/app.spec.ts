@@ -110,6 +110,19 @@ test.describe('App', () => {
     await expect(page.getByRole('complementary', { name: 'Tasks' })).toBeVisible();
   });
 
+  /** #165: the Tasks pane on a key, like every other place in the app. `x`,
+   *  what goes in a checkbox; it toggles, as Menu → Tasks… does. */
+  test('X opens the Tasks pane, and X again closes it', async ({ page }) => {
+    await page.goto(app());
+    await expect(page.locator('.vswitch button')).toHaveCount(5);
+    const side = page.getByRole('complementary', { name: 'Tasks' });
+    await expect(side).toHaveCount(0);
+    await page.keyboard.press('x');
+    await expect(side).toBeVisible();
+    await page.keyboard.press('x');
+    await expect(side).toHaveCount(0);
+  });
+
   /** #138: the whole interface's size, for a screen whose scaling does not
    *  reach the app. Stored on release, not while the slider moves (zooming
    *  under the hand would move the slider itself), and one press back. */
@@ -873,7 +886,11 @@ test.describe('App', () => {
       await expect(page.locator('h1')).toHaveText('January 2024');
       // A finger drag, up, fast enough and far enough to be strong. The moves
       // are paced at ~16ms so the velocity estimate sees real speed rather than
-      // three events in one tick.
+      // three events in one tick. 80px a step is ~5 px/ms against the 2 px/ms
+      // threshold: at 40px (2.5 px/ms) a timer running late on a loaded runner
+      // took it under, and CI failed it on both engines. The threshold's edges
+      // are `swipePage`'s own tests (periodscroll.spec.ts); this one is the
+      // wiring.
       await page.locator('.view').evaluate((view) => new Promise<void>((resolve) => {
         const fire = (type: string, y: number) => view.dispatchEvent(new PointerEvent(type, {
           pointerType: 'touch', pointerId: 7, clientX: 120, clientY: y, bubbles: true,
@@ -881,9 +898,9 @@ test.describe('App', () => {
         let y = 400;
         fire('pointerdown', y);
         const step = () => {
-          y -= 40;
+          y -= 80;
           fire('pointermove', y);
-          if (y > 280) { setTimeout(step, 16); } else { fire('pointerup', y); resolve(); }
+          if (y > 160) { setTimeout(step, 16); } else { fire('pointerup', y); resolve(); }
         };
         setTimeout(step, 16);
       }));
@@ -6693,6 +6710,28 @@ test.describe("App: showing today's date", () => {
     await expect(modal.getByTestId('settings-note')).toHaveCount(0);
   });
 
+  /** #167: how far ahead the bar names the next meeting. A day unless
+   *  chosen, saved with the other bar preferences. */
+  test('the bar names the next meeting only as far ahead as chosen', async ({ page }) => {
+    await page.goto(app('writable'));
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('button', { name: 'Settings…' }).click();
+    const modal = page.getByRole('dialog', { name: 'Settings' });
+    await modal.getByRole('tab', { name: 'Menu bar' }).click();
+    const picker = modal.getByRole('combobox', { name: 'Show the next meeting within' });
+    await expect(picker).toHaveText(/24 hours/);
+    await picker.click();
+    await page.getByRole('listbox', { name: 'Show the next meeting within' }).getByRole('option', { name: '4 hours', exact: true }).click();
+    await expect(modal.getByTestId('menubar-horizon-note')).toHaveText('Saved');
+    const calls = await page.evaluate(() => window.__harness.settingValues('menubarPreferences'));
+    expect(calls).toEqual([{ dayView: false, label: true, joinMinutes: 5, labelHours: 4 }]);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('button', { name: 'Settings…' }).click();
+    await modal.getByRole('tab', { name: 'Menu bar' }).click();
+    await expect(picker).toHaveText(/4 hours/);
+  });
+
   test('menu bar label and Join timing are saved and remembered', async ({ page }) => {
     await page.goto(app('writable'));
     await page.getByRole('button', { name: 'Menu' }).click();
@@ -6703,8 +6742,8 @@ test.describe("App: showing today's date", () => {
     await modal.getByLabel('Show meeting title and countdown').uncheck();
     const calls = await page.evaluate(() => window.__harness.settingValues('menubarPreferences'));
     expect(calls).toEqual([
-      { dayView: false, label: true, joinMinutes: 15 },
-      { dayView: false, label: false, joinMinutes: 15 },
+      { dayView: false, label: true, joinMinutes: 15, labelHours: 24 },
+      { dayView: false, label: false, joinMinutes: 15, labelHours: 24 },
     ]);
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Menu' }).click();
@@ -6726,9 +6765,9 @@ test.describe("App: showing today's date", () => {
     await modal.getByLabel('Show meeting title and countdown').uncheck();
     const calls = await page.evaluate(() => window.__harness.settingValues('menubarPreferences'));
     expect(calls).toEqual([
-      { dayView: true, label: true, joinMinutes: 5 },
-      { dayView: true, label: true, joinMinutes: 15 },
-      { dayView: true, label: false, joinMinutes: 15 },
+      { dayView: true, label: true, joinMinutes: 5, labelHours: 24 },
+      { dayView: true, label: true, joinMinutes: 15, labelHours: 24 },
+      { dayView: true, label: false, joinMinutes: 15, labelHours: 24 },
     ]);
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: 'Menu' }).click();
@@ -8367,6 +8406,111 @@ test('visible hours persist, shorten Day and Week, and keep click creation at th
   await expect(modal.getByLabel('Visible hours start time')).toHaveValue('5');
   await expect(modal.getByLabel('Visible hours end time')).toHaveValue('23');
 });
+
+test('fitted visible hours fill the pane, and the rest of the day is a scroll away', async ({ page }) => {
+  await page.clock.setFixedTime(APP_NOW);
+  await page.goto(app('writable'));
+  const body = page.getByTestId('week-body');
+  await expect(body).toBeVisible();
+  const modal = page.getByRole('dialog', { name: 'Settings' });
+  const openAppearance = async () => {
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    await page.getByRole('button', { name: 'Settings…' }).click();
+    await modal.getByRole('tab', { name: 'Appearance' }).click();
+  };
+  await openAppearance();
+  await modal.getByLabel('Visible hours start time').selectOption('8');
+  await modal.getByLabel('Visible hours end time').selectOption('18');
+  await modal.getByLabel('Fit these hours to the window').check();
+  await page.keyboard.press('Escape');
+
+  // The pane less the first label's 8px of headroom, shared by ten hours.
+  const fitted = () => body.evaluate((el) => Math.floor((el.clientHeight - 8) / 10));
+  const colHeight = () => page.locator('.col').first().evaluate((el) => el.getBoundingClientRect().height);
+  const scrolled = () => body.evaluate((el) => Math.round(el.scrollTop));
+  const px = await fitted();
+  // The whole day is drawn, 08:00 is at the top and 18:00 at the bottom.
+  await expect.poll(colHeight).toBe(px * 24);
+  await expect(body.locator('.gutter span')).toHaveCount(24);
+  await expect.poll(scrolled).toBe(8 * px);
+  const below = await body.evaluate((el, px) => el.clientHeight - (8 + 10 * px), px);
+  expect(below).toBeGreaterThanOrEqual(0);
+  expect(below).toBeLessThan(10);
+
+  // A click lands where it is drawn: half an hour below 08:00 is 08:30.
+  const top = (await body.boundingBox())!.y + 8;
+  const col = (await body.locator('.hour-crop').nth(1).boundingBox())!;
+  await page.mouse.click(col.x + 20, top + px / 2 + 2);
+  const form = page.getByRole('dialog', { name: 'New event' });
+  await expect(form.getByLabel('Start', { exact: true })).toHaveValue('08:30');
+  await page.keyboard.press('Escape');
+  await expect(form).toBeHidden();
+
+  // Scrolled to midnight, Today puts the chosen hours back.
+  await body.evaluate((el) => { el.scrollTop = 0; });
+  await page.getByRole('button', { name: 'Today', exact: true }).click();
+  await expect.poll(scrolled).toBe(8 * px);
+
+  // A taller window refits them, still from the top.
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await expect.poll(fitted).toBeGreaterThan(px);
+  const taller = await fitted();
+  await expect.poll(colHeight).toBe(taller * 24);
+  await expect.poll(scrolled).toBe(8 * taller);
+
+  // Kept for next time.
+  await page.reload();
+  await expect.poll(scrolled).toBe(8 * taller);
+
+  // They zoom like any grid, a key's step holding the first of them at the
+  // top, and reopening the window fits them again.
+  await page.keyboard.press('Control+=');
+  const zoomed = Math.round(taller * 1.25);
+  await expect.poll(colHeight).toBe(zoomed * 24);
+  await expect.poll(async () => (await scrolled()) / zoomed).toBeCloseTo(8, 1);
+  await body.hover();
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -300);
+  await page.keyboard.up('Control');
+  await expect.poll(colHeight).toBeGreaterThan(zoomed * 24);
+  await page.evaluate(() => window.__harness.emit('app-opened', null));
+  await expect.poll(colHeight).toBe(taller * 24);
+  await expect.poll(scrolled).toBe(8 * taller);
+
+  // Ctrl+0 fits them again too, and puts them back in place.
+  await page.keyboard.press('Control+-');
+  await expect.poll(colHeight).toBe(Math.round(taller / 1.25) * 24);
+  await body.evaluate((el) => { el.scrollTop = 0; });
+  await page.keyboard.press('Control+0');
+  await expect.poll(colHeight).toBe(taller * 24);
+  await expect.poll(scrolled).toBe(8 * taller);
+
+  // Off again, the grid crops to ten hours at the stored zoom, which none
+  // of that touched.
+  await openAppearance();
+  await expect(modal.getByLabel('Fit these hours to the window')).toBeChecked();
+  await modal.getByLabel('Fit these hours to the window').uncheck();
+  await page.keyboard.press('Escape');
+  await expect(body.locator('.gutter span')).toHaveCount(10);
+  await expect.poll(colHeight).toBe(70 * 24);
+});
+
+// The hint names the key this platform's users reach for, ⌘0 on a Mac and
+// Ctrl+0 elsewhere, as the shortcut sheet does. The handler takes either.
+for (const [platform, key] of [['Linux x86_64', 'Ctrl+0'], ['MacIntel', '⌘0']] as const) {
+  test(`the fit switch's hint names ${key} on ${platform}`, async ({ page }) => {
+    await page.addInitScript((p) => {
+      Object.defineProperty(Navigator.prototype, 'platform', { get: () => p });
+    }, platform);
+    await page.goto(app('writable'));
+    await page.getByRole('button', { name: 'Menu', exact: true }).click();
+    await page.getByRole('button', { name: 'Settings…' }).click();
+    const modal = page.getByRole('dialog', { name: 'Settings' });
+    await modal.getByRole('tab', { name: 'Appearance' }).click();
+    await modal.getByLabel('Fit these hours to the window').check();
+    await expect(modal.getByText(/fits them again/)).toContainText(`and ${key} fits them again`);
+  });
+}
 
   test('a menu bar quick-add request opens the NLP form without submitting', async ({ page }) => {
     await page.goto(app('writable'));

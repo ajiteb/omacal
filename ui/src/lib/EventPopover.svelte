@@ -14,6 +14,7 @@
   import { descriptionSegments } from './sanitize';
   import { occurrenceDate, ruleInWords } from './eventform';
   import { isMachineAddress } from './organizer';
+  import { leftOutByYourNo } from './owndecline';
   import { respondToEvent, type Attendee, type EventDetail } from './eventdetail';
   import { pendingResponse, responsePending, responseFailure, dismissResponseFailure, showResponseFailuresHere } from './responses.svelte';
   import { isPending } from './pending.svelte';
@@ -187,6 +188,30 @@
    *  one-off answers in one click with no question at all. */
   let pending = $state<'accepted' | 'tentative' | 'declined' | null>(null);
 
+  /** No on your own meeting reaches nobody — see `owndecline.ts` — so it
+   *  asks first whether the meeting is off for everyone or only for you.
+   *  With one other person on it, calling it off is what No almost always
+   *  means, so that answer takes focus; with more, the others may well meet
+   *  without you, and marking yourself out does. */
+  let askingOwnNo = $state(false);
+  const leftOut = $derived(leftOutByYourNo(detail));
+  const leftOutWords = $derived(
+    leftOut.length === 1
+      ? `${leftOut[0].display_name ?? leftOut[0].email} isn’t told and still has it on their calendar.`
+      : `your ${leftOut.length} guests aren’t told and still have it on their calendars.`,
+  );
+  /** Cancelling is the Delete button's job, confirmation and all — this
+   *  only hands over to it, so the guests' cancellation email and the scope
+   *  of a series are decided where they always are. */
+  function cancelOwnMeeting() {
+    askingOwnNo = false;
+    ondelete();
+  }
+  function markMeOut(e: MouseEvent) {
+    askingOwnNo = false;
+    void answer('declined', e);
+  }
+
   /** What a reader learns at a glance instead of the old always-on radio:
    *  that this is one occurrence of a series, and on what cadence. */
   const REPEAT_WORDS: Record<string, string> = {
@@ -258,7 +283,7 @@
    *  A series **master** still asks, because from a master both readings are
    *  live: "I can make this week" and "I can make all of these" are
    *  different answers and the app cannot pick between them. */
-  async function ask(response: 'accepted' | 'tentative' | 'declined', e: MouseEvent) {
+  async function answer(response: 'accepted' | 'tentative' | 'declined', e: MouseEvent) {
     if (!detail.is_recurring || detail.is_series_exception) {
       respond(response, 'this', e);
       return;
@@ -266,6 +291,17 @@
     pending = response;
     await tick();
     focusInitialChoice(panelEl);
+  }
+  /** What the three buttons call. A No on your own meeting stops at
+   *  `askingOwnNo` first; everything else goes straight to `answer`. */
+  async function ask(response: 'accepted' | 'tentative' | 'declined', e: MouseEvent) {
+    if (response === 'declined' && leftOut.length > 0) {
+      askingOwnNo = true;
+      await tick();
+      focusInitialChoice(panelEl);
+      return;
+    }
+    await answer(response, e);
   }
   /** A `Set`, mirroring `CalendarPopover`: today there is only ever one RSVP
    *  target, so it never holds more than one entry, but a plain boolean
@@ -622,6 +658,18 @@
   {/if}
 
   {#if detail.can_respond}
+    {#if askingOwnNo}
+      <div class="own-decline ask" role="group" aria-label="No to your own meeting" data-choice-group data-testid="own-decline">
+        <p>You organise this. A No only changes your answer: {leftOutWords}</p>
+        <!-- The same gate as the Delete button below: no cancelling while a
+             change to this occurrence is still being written. -->
+        {#if detail.can_edit && !locked}
+          <button type="button" data-choice data-initial-choice={leftOut.length === 1 ? '' : undefined} onclick={cancelOwnMeeting}>Cancel the meeting</button>
+        {/if}
+        <button type="button" data-choice data-initial-choice={leftOut.length === 1 ? undefined : ''} onclick={markMeOut}>Just mark me out</button>
+        <button type="button" class="back" aria-label="Keep my answer" onclick={() => (askingOwnNo = false)}>✕</button>
+      </div>
+    {/if}
     {#if pending}
       <!-- The scope, asked exactly when it means something: a response has
            been chosen and this event repeats. `.scope` keeps its class so the
@@ -634,13 +682,13 @@
       </div>
     {/if}
     <div class="rsvp">
-      <button data-event-response="accepted" class:chosen={shown === 'accepted'} disabled={savingResponse || pending !== null} onclick={(e) => ask('accepted', e)}
+      <button data-event-response="accepted" class:chosen={shown === 'accepted'} disabled={savingResponse || pending !== null || askingOwnNo} onclick={(e) => ask('accepted', e)}
         >Yes</button
       >
-      <button data-event-response="tentative" class:chosen={shown === 'tentative'} disabled={savingResponse || pending !== null} onclick={(e) => ask('tentative', e)}
+      <button data-event-response="tentative" class:chosen={shown === 'tentative'} disabled={savingResponse || pending !== null || askingOwnNo} onclick={(e) => ask('tentative', e)}
         >Maybe</button
       >
-      <button data-event-response="declined" class:chosen={shown === 'declined'} disabled={savingResponse || pending !== null} onclick={(e) => ask('declined', e)}
+      <button data-event-response="declined" class:chosen={shown === 'declined'} disabled={savingResponse || pending !== null || askingOwnNo} onclick={(e) => ask('declined', e)}
         >No</button
       >
     </div>
@@ -799,13 +847,17 @@
   }
 
   .cadence { color: var(--muted); font-size: 11px; margin: -4px 0 8px; }
-  .scope { display: flex; gap: 8px; align-items: center; font-size: 11px;
+  .scope, .own-decline { display: flex; gap: 8px; align-items: center; font-size: 11px;
            margin: 8px 0 6px; color: var(--muted); }
-  .scope button { font: inherit; font-size: 11px; color: var(--text); cursor: pointer;
+  .scope button, .own-decline button { font: inherit; font-size: 11px; color: var(--text); cursor: pointer;
                   background: color-mix(in srgb, var(--text) 6%, transparent);
                   border: 1px solid var(--hairline); border-radius: 5px; padding: 3px 8px; }
-  .scope .back { background: none; border: 0; color: var(--muted); padding: 0 2px; }
-  .scope .back:hover { color: var(--text); }
+  .scope .back, .own-decline .back { background: none; border: 0; color: var(--muted); padding: 0 2px; }
+  .scope .back:hover, .own-decline .back:hover { color: var(--text); }
+  /* The sentence on a line of its own, the answers beneath it: a 320px panel
+     has no room for both in one row. */
+  .own-decline { flex-wrap: wrap; }
+  .own-decline p { flex-basis: 100%; margin: 0; color: var(--text); line-height: 1.4; }
 
   .rsvp { display: flex; gap: 6px; margin-top: 6px; }
   .rsvp button { flex: 1; font: inherit; font-size: 11.5px; cursor: pointer;

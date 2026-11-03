@@ -440,6 +440,7 @@ const cal = (o: Partial<Calendar> & { id: number; account_email: string; summary
   // `EventForm`'s own fixtures name the role explicitly, because for that
   // component it is the thing under test.
   access_role: 'owner',
+  supports_events: true,
   ...o,
 });
 
@@ -2762,6 +2763,11 @@ export const FIXTURES: Record<string, Record<string, any>> = {
       detail: detail({
         id: 1,
         title: 'Standup',
+        // Ana's meeting, which this unanswered row already implied: nobody is
+        // sent an invitation to their own event. As the organizer, a No here
+        // would ask first (`own-one-on-one` below).
+        organizer_email: 'ana@x.com',
+        is_organizer: false,
         attendees: [
           attendee({ email: 'ana@x.com', display_name: 'Ana', response_status: 'accepted' }),
           attendee({ email: 'me@x.com', is_self: true, response_status: 'needsAction' }),
@@ -3045,6 +3051,69 @@ export const FIXTURES: Record<string, Record<string, any>> = {
     editable: {
       detail: detail({ id: 8, title: 'Board prep', can_edit: true }),
       anchor: ANCHOR, occurrenceStartMs: MON + 9 * H, occurrenceEndMs: MON + 9 * H + 30 * 60_000,
+      onclose: noop, onresponded: noop, onedit: noop, ondelete: noop,
+    },
+    // --- No on your own meeting (2026-10-26). Plamen answered No to today's
+    // 1:1 on his own calendar and Teodor was never told: Google mails a
+    // guest's No to the organizer, and here the organizer is the one saying
+    // it. The reported shape: a one-off with one other person on it.
+    'own-one-on-one': {
+      detail: detail({
+        id: 90, title: 'Plamen - Teodor 1:1 meeting', can_edit: true,
+        organizer_email: 'me@x.com', self_response: 'accepted',
+        attendees: [
+          attendee({ email: 'me@x.com', is_self: true, response_status: 'accepted' }),
+          attendee({ email: 'teodor@x.com', display_name: 'Teodor', response_status: 'accepted' }),
+        ],
+      }),
+      anchor: ANCHOR, occurrenceStartMs: MON + 13 * H, occurrenceEndMs: MON + 14 * H,
+      onclose: noop, onresponded: noop, onedit: noop, ondelete: noop,
+    },
+    // The case "just mark me out" exists for: a weekly meeting you run, which
+    // the others hold without you. Three people still expect it — the room and
+    // the guest who already declined do not count.
+    'own-weekly-team': {
+      detail: detail({
+        id: 91, title: 'Team sync', can_edit: true, is_recurring: true,
+        repeat: 'weekly', recurrence: 'RRULE:FREQ=WEEKLY',
+        organizer_email: 'me@x.com', self_response: 'accepted',
+        attendees: [
+          attendee({ email: 'me@x.com', is_self: true, response_status: 'accepted' }),
+          attendee({ email: 'ana@x.com', display_name: 'Ana', response_status: 'accepted' }),
+          attendee({ email: 'ivan@x.com', display_name: 'Ivan', response_status: 'needsAction' }),
+          attendee({ email: 'petya@x.com', display_name: 'Petya', response_status: 'tentative' }),
+          attendee({ email: 'zoe@x.com', display_name: 'Zoe', response_status: 'declined' }),
+          attendee({ email: 'c_4a@resource.calendar.google.com', response_status: 'accepted' }),
+        ],
+      }),
+      anchor: ANCHOR, occurrenceStartMs: MON + 9 * H, occurrenceEndMs: MON + 10 * H,
+      onclose: noop, onresponded: noop, onedit: noop, ondelete: noop,
+    },
+    // Your own meeting on CalDAV, where OmaCal emails nobody about anything:
+    // there is no Google rule to warn about, so No answers as it always has.
+    'own-caldav-meeting': {
+      detail: detail({
+        id: 92, title: 'Plan review', can_edit: true, mails_guests: false,
+        organizer_email: 'me@x.com', self_response: 'accepted',
+        attendees: [
+          attendee({ email: 'me@x.com', is_self: true, response_status: 'accepted' }),
+          attendee({ email: 'teodor@x.com', display_name: 'Teodor', response_status: 'accepted' }),
+        ],
+      }),
+      anchor: ANCHOR, occurrenceStartMs: MON + 9 * H, occurrenceEndMs: MON + 10 * H,
+      onclose: noop, onresponded: noop, onedit: noop, ondelete: noop,
+    },
+    // Your own meeting with a room booked and no one else: nobody to tell.
+    'own-meeting-with-a-room': {
+      detail: detail({
+        id: 93, title: 'Focus block', can_edit: true,
+        organizer_email: 'me@x.com', self_response: 'accepted',
+        attendees: [
+          attendee({ email: 'me@x.com', is_self: true, response_status: 'accepted' }),
+          attendee({ email: 'c_4a@resource.calendar.google.com', response_status: 'accepted' }),
+        ],
+      }),
+      anchor: ANCHOR, occurrenceStartMs: MON + 9 * H, occurrenceEndMs: MON + 10 * H,
       onclose: noop, onresponded: noop, onedit: noop, ondelete: noop,
     },
     // --- Task 6's sweep: the `when` line, which read the master's instants --

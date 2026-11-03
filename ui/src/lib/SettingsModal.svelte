@@ -24,14 +24,20 @@
   } from './settings';
   import { formatClock, type TimeFormat } from './timefmt';
   import ThemePicker from './ThemePicker.svelte';
+  import ListPicker, { type ListChoice } from './ListPicker.svelte';
   import { appearancePreviews } from './settings';
   import type { Palette } from './theme';
   import type { TemperatureUnit } from './temperature';
   import type { WeekStartDay } from './weekstart';
+  import { MOD_LABEL } from './shortcuts';
 
   async function changeVisibleHours(start: number, end: number) {
     try { settings = await setSetting('visibleHours', { start, end }); onsettingschange?.(settings); }
     catch (e) { note = { text: String(e), kind: "error" }; }
+  }
+  async function changeVisibleHoursFit(on: boolean) {
+    try { settings = await setSetting('visibleHoursFit', on); onsettingschange?.(settings); }
+    catch (e) { note = { text: String(e), kind: 'error' }; }
   }
   async function changeHideWeekends(on: boolean) {
     try { settings = await setSetting('hideWeekends', on); onsettingschange?.(settings); }
@@ -116,7 +122,16 @@
   let formatNote = $state<{ text: string; kind: 'info' | 'error' } | null>(null);
   let viewNote = $state<{ text: string; kind: 'info' | 'error' } | null>(null);
   let joinNote = $state<{ text: string; kind: 'info' | 'error' } | null>(null);
+  let horizonNote = $state<{ text: string; kind: 'info' | 'error' } | null>(null);
   let menubarBusy = $state(false);
+  /** How far ahead the bar may name the next meeting (#167); the backend
+   *  refuses any other span. */
+  const LABEL_HORIZONS: ListChoice[] = [
+    { id: 1, name: '1 hour', color: null }, { id: 4, name: '4 hours', color: null },
+    { id: 12, name: '12 hours', color: null }, { id: 24, name: '24 hours', color: null },
+    { id: 72, name: '3 days', color: null }, { id: 168, name: 'A week', color: null },
+    { id: 336, name: '2 weeks', color: null },
+  ];
   /** The agenda popup's three section choices, saved together like the label
    *  and Join window: the backend stores them in one transaction. `where`
    *  puts the answer beside the control that asked. */
@@ -191,15 +206,17 @@
     dayView = settings?.menubarDayView ?? false,
     label = settings?.menubarLabel ?? true,
     joinMinutes = settings?.menubarJoinMinutes ?? 5,
-    where: 'label' | 'join' | 'view' = 'label',
+    where: 'label' | 'join' | 'view' | 'horizon' = 'label',
+    labelHours = settings?.menubarLabelHours ?? 24,
   ) {
     const say = (n: { text: string; kind: 'info' | 'error' } | null) => {
-      if (where === 'label') labelNote = n; else if (where === 'view') viewNote = n; else joinNote = n;
+      if (where === 'label') labelNote = n; else if (where === 'view') viewNote = n;
+      else if (where === 'horizon') horizonNote = n; else joinNote = n;
     };
     menubarBusy = true;
     say({ text: 'Applying…', kind: 'info' });
     try {
-      settings = await setSetting('menubarPreferences', { dayView, label, joinMinutes });
+      settings = await setSetting('menubarPreferences', { dayView, label, joinMinutes, labelHours });
       onsettingschange?.(settings);
       say({ text: 'Saved', kind: 'info' });
     } catch (e) { say({ text: String(e), kind: 'error' }); }
@@ -1356,7 +1373,16 @@
             {#each Array.from({ length: 24 }, (_, h) => h + 1) as h}<option value={h} disabled={h <= (settings?.visibleStartHour ?? 0)}>{h === 24 ? 'Midnight (end of day)' : formatClock(new Date(2020, 0, 1, h).getTime(), settings?.timeFormat ?? '24h')}</option>{/each}
           </select></label>
         </div>
-        <p class="hint">Hours shown in Day, Week, and the menu-bar day view. Events outside this range remain in the agenda and search.</p>
+        <label class="check">
+          <input type="checkbox" checked={settings?.visibleHoursFit ?? false} disabled={!settings}
+            onchange={(e) => changeVisibleHoursFit(e.currentTarget.checked)} />
+          Fit these hours to the window
+        </label>
+        {#if settings?.visibleHoursFit}
+          <p class="hint">Day and Week size these hours to fill the window, and the rest of the day is a scroll away. Zooming works as usual until the window is closed, and {MOD_LABEL === '⌘' ? '⌘0' : 'Ctrl+0'} fits them again. The menu-bar day view shows these hours only.</p>
+        {:else}
+          <p class="hint">Hours shown in Day, Week, and the menu-bar day view. Events outside this range remain in the agenda and search.</p>
+        {/if}
       </section>
       {#if settings?.transparentWindow ?? true}
       <section class="appearance-section" aria-labelledby="background-style-heading">
@@ -1650,6 +1676,21 @@
                   data-testid="menubar-label-note">{labelNote.text}</span>
           {/if}
         </div>
+        <!-- #167: a quiet week read "in 212h 23m". The spans are the ones the
+             backend accepts; the feed carries two weeks, so nothing reaches
+             further. -->
+        <span class="lab" aria-hidden="true">Show the next meeting within</span>
+        <div class="inline">
+          <ListPicker noDot label="Show the next meeting within" choices={LABEL_HORIZONS}
+            value={settings?.menubarLabelHours ?? 24}
+            disabled={!settings || menubarBusy || !(settings?.menubarLabel ?? true)}
+            onpick={(hours) => saveMenubar(undefined, undefined, undefined, 'horizon', hours ?? 24)} />
+          {#if horizonNote}
+            <span class="rownote" class:err={horizonNote.kind === 'error'}
+                  data-testid="menubar-horizon-note">{horizonNote.text}</span>
+          {/if}
+        </div>
+        <p class="hint">A meeting you are in, or can already join, shows either way.</p>
         <label class="lab" for="meeting-format">Meeting label format</label>
         <input id="meeting-format" class="format-template" type="text" maxlength="256"
                bind:value={meetingFormat} disabled={!settings || menubarBusy} />

@@ -7,6 +7,7 @@ import type { WeekStartDay } from './weekstart';
 import type { EventCornerStyle, FontFamily } from './appearance';
 import type { View } from './views';
 import type { TaskSort } from './tasks';
+import type { CalendarGroup } from './calendargroups';
 
 /** A `View`, plus `'last'` — "wherever the switcher was most recently,"
  *  which is `defaultViewFollowsLast`, not a sixth `View` value: `View` also
@@ -115,6 +116,9 @@ export type AppSettings = {
    *  which is what makes it survive a restart. */
   listMode: boolean;
   combineIdenticalEvents: boolean;
+  /** The saved calendar groups, in switcher order. Which is active is derived
+   *  from what is shown, never stored — see `calendargroups.ts`. */
+  calendarGroups: CalendarGroup[];
   /** Pixels per hour in Day and Week — what a pinch, Ctrl+scroll or Ctrl+=/-
    *  left the grid at. Stored for `listMode`'s reason and, like it, shown by
    *  no tab: the gesture is the control. `zoom.ts` owns the range. */
@@ -188,6 +192,9 @@ export type AppSettings = {
   weekViewDays: WeekViewDays;
   visibleStartHour: number;
   visibleEndHour: number;
+  /** Whether Day and Week draw the whole day and size the visible hours
+   *  to fill the window, rather than leaving the rest of the day out. */
+  visibleHoursFit: boolean;
   /** Whether Saturday and Sunday columns are dropped from Week and Day
    *  view. Month, Year and Big Year are unaffected. */
   hideWeekends: boolean;
@@ -202,6 +209,8 @@ export type AppSettings = {
   menubarDayView?: boolean;
   menubarLabel?: boolean;
   menubarJoinMinutes?: number;
+  /** How far ahead the bar names the next meeting, in hours (#167). */
+  menubarLabelHours?: number;
   /** The agenda popups' section choices — the Omarchy widget and the macOS
    *  menu bar alike, through the feed. Today is always shown and is not a
    *  choice; these are what comes before and after it. */
@@ -318,7 +327,7 @@ export type SettingValues = {
   showDate: boolean;
   menubarLabelFormat: string;
   menubarDateFormat: { format: AppSettings['menubarDateFormat']; custom: string };
-  menubarPreferences: { dayView: boolean; label: boolean; joinMinutes: number };
+  menubarPreferences: { dayView: boolean; label: boolean; joinMinutes: number; labelHours: number };
   menubarDayView: boolean;
   menubarSections: { earlier: 'folded' | 'off'; tomorrow: boolean; daysAhead: number };
   /** Clamped rather than refused: the value comes off a gesture. */
@@ -333,8 +342,12 @@ export type SettingValues = {
   weekStartsToday: boolean;
   weekViewDays: WeekViewDays;
   visibleHours: { start: number; end: number };
+  visibleHoursFit: boolean;
   hideWeekends: boolean;
   combineIdenticalEvents: boolean;
+  /** The whole list, replaced in one write; refused with a sentence for a
+   *  blank, over-long or duplicate name. */
+  calendarGroups: CalendarGroup[];
   /** Also leaves "Last view" mode. */
   defaultView: View;
   defaultViewFollowsLast: boolean;

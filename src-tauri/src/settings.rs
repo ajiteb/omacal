@@ -104,12 +104,20 @@ pub(crate) const MENUBAR_LABEL_FORMAT_KEY: &str = "menubar_label_format";
 pub(crate) const MENUBAR_DAY_VIEW_KEY: &str = "menubar_day_view";
 pub(crate) const MENUBAR_LABEL_KEY: &str = "menubar_label";
 pub(crate) const MENUBAR_JOIN_MINUTES_KEY: &str = "menubar_join_minutes";
+const MENUBAR_LABEL_HOURS_KEY: &str = "menubar_label_hours";
+/// How far ahead the bar's label may name the next meeting (#167): a day
+/// unless chosen, and only these spans. Two weeks is all the feed carries.
+pub(crate) const DEFAULT_LABEL_HOURS: u32 = 24;
+const LABEL_HOURS: [u32; 7] = [1, 4, 12, 24, 72, 168, 336];
 pub(crate) const MENUBAR_EARLIER_KEY: &str = "menubar_earlier";
 pub(crate) const MENUBAR_TOMORROW_KEY: &str = "menubar_tomorrow";
 pub(crate) const MENUBAR_DAYS_AHEAD_KEY: &str = "menubar_days_ahead";
 pub(crate) const DATE_FORMAT_KEY: &str = "date_format";
 pub(crate) const VISIBLE_HOURS_KEY: &str = "visible_hours";
+const VISIBLE_HOURS_FIT_KEY: &str = "visible_hours_fit";
 pub(crate) const COMBINE_IDENTICAL_EVENTS_KEY: &str = "combine_identical_events";
+/// The saved calendar groups, one JSON array (see [`CalendarGroup`]).
+const CALENDAR_GROUPS_KEY: &str = "calendar_groups";
 
 /// The boot fast-path beside the database: `main()` must export `TZ` before
 /// GTK and the webview initialise — both capture the zone at process start —
@@ -564,6 +572,9 @@ pub struct AppSettings {
     pub menubar_day_view: bool,
     pub menubar_label: bool,
     pub menubar_join_minutes: u32,
+    /// How far ahead the label names the next meeting, in hours (#167). A
+    /// meeting you are in, or can already join, is named regardless.
+    pub menubar_label_hours: u32,
     /// The three choices the agenda popups (Omarchy widget, macOS menu bar)
     /// leave to the user — see `Timeline.agendaSections`, which both surfaces
     /// share. Today is always shown in full and is not a choice.
@@ -757,6 +768,10 @@ pub struct AppSettings {
     pub week_view_days: u8,
     pub visible_start_hour: u8,
     pub visible_end_hour: u8,
+    /// Whether Day and Week draw the whole day and size the visible hours to
+    /// fill the window, the rest a scroll away, rather than leaving the rest
+    /// out. The menu bar's day view keeps the plain range either way.
+    pub visible_hours_fit: bool,
     /// Whether Saturday and Sunday columns are dropped from Week and Day
     /// view. Month, Year and Big Year are unaffected, for `week_starts_today`'s
     /// reason: those grids need every weekday to keep their rows aligned.
@@ -789,6 +804,71 @@ pub struct AppSettings {
     /// process-level `TZ` is involved; the webview converts at render time
     /// from the IANA name itself.
     pub second_timezone: Option<String>,
+    /// The saved calendar groups, in the order the switcher lists them (and so
+    /// the order ⌘1–⌘9 count in). Which one is *active* is not stored: it is
+    /// whichever group's calendars are exactly the ones shown right now, worked
+    /// out in the UI, so toggling a calendar by hand can never leave a stale
+    /// "active" mark behind. Empty for installs without the row.
+    pub calendar_groups: Vec<CalendarGroup>,
+}
+
+/// A named, saved choice of which calendars are **shown** — the `selected`
+/// flag, not `sync_enabled`. Applying one is a display change only; nothing
+/// stops syncing and nothing reaches Google. Ids that no longer name a
+/// calendar the picker can toggle (`sync_enabled`) are left in place and
+/// ignored when a group is applied or compared, rather than pruned on every
+/// calendar removal. That keeps a calendar's place in a group across sync off
+/// and on, which keeps its id; it does not survive removing an account and
+/// connecting it again, which mints new ids — a group left with none of its
+/// calendars is refused when applied, and wants updating or deleting.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarGroup {
+    pub name: String,
+    pub calendar_ids: Vec<i64>,
+}
+
+/// More than this and the switcher is a list nobody scans, and ⌘1–⌘9 reach
+/// only nine anyway. A bound so a hand-written invoke cannot grow the row
+/// without limit, not a number anyone should meet.
+const MAX_CALENDAR_GROUPS: usize = 50;
+const MAX_CALENDAR_GROUP_NAME: usize = 60;
+
+/// The stored groups, or none when the row is absent or is not what
+/// [`validate_calendar_groups`] would have written — a hand-edited row must
+/// land on "no groups", not on a broken switcher.
+async fn calendar_groups(pool: &SqlitePool) -> Vec<CalendarGroup> {
+    read(pool, CALENDAR_GROUPS_KEY)
+        .await
+        .and_then(|v| serde_json::from_str(&v).ok())
+        .unwrap_or_default()
+}
+
+/// Trims names, refuses the ones the switcher could not tell apart, and drops
+/// repeated ids. Returns what to store, so the row only ever holds the
+/// normalised form.
+fn validate_calendar_groups(groups: &[CalendarGroup]) -> Result<Vec<CalendarGroup>, String> {
+    if groups.len() > MAX_CALENDAR_GROUPS {
+        return Err(format!("You can keep up to {MAX_CALENDAR_GROUPS} calendar groups."));
+    }
+    let mut out: Vec<CalendarGroup> = Vec::with_capacity(groups.len());
+    for g in groups {
+        let name = g.name.trim();
+        if name.is_empty() {
+            return Err("A calendar group needs a name.".into());
+        }
+        if name.chars().count() > MAX_CALENDAR_GROUP_NAME {
+            return Err(format!("A group name can be up to {MAX_CALENDAR_GROUP_NAME} characters."));
+        }
+        if out.iter().any(|o| o.name.to_lowercase() == name.to_lowercase()) {
+            return Err("Two calendar groups cannot share a name.".into());
+        }
+        let mut ids = g.calendar_ids.clone();
+        ids.sort_unstable();
+        ids.dedup();
+        out.push(CalendarGroup { name: name.to_string(), calendar_ids: ids });
+    }
+    Ok(out)
 }
 
 pub(crate) async fn read(pool: &SqlitePool, key: &str) -> Option<String> {
@@ -901,6 +981,7 @@ pub(crate) async fn read_settings_with(pool: &SqlitePool, baseline: u8) -> AppSe
         // turning the calendar into a list.
         list_mode: read(pool, LIST_MODE_KEY).await.map(|v| v == "1").unwrap_or(false),
         combine_identical_events: combine_identical_events(pool).await,
+        calendar_groups: calendar_groups(pool).await,
         // The mark unless the row says otherwise, for `list_mode`'s reason:
         // a hand-edited value must land on what the app has always drawn.
         show_date: read(pool, SHOW_DATE_KEY).await.map(|v| v == "1").unwrap_or(false),
@@ -908,6 +989,8 @@ pub(crate) async fn read_settings_with(pool: &SqlitePool, baseline: u8) -> AppSe
         menubar_label: read(pool, MENUBAR_LABEL_KEY).await.as_deref() != Some("0"),
         menubar_join_minutes: read(pool, MENUBAR_JOIN_MINUTES_KEY).await
             .and_then(|v| v.parse().ok()).filter(|v| *v <= 60).unwrap_or(5),
+        menubar_label_hours: read(pool, MENUBAR_LABEL_HOURS_KEY).await
+            .and_then(|v| v.parse().ok()).filter(|v| LABEL_HOURS.contains(v)).unwrap_or(DEFAULT_LABEL_HOURS),
         menubar_earlier: match read(pool, MENUBAR_EARLIER_KEY).await.as_deref() {
             Some("off") => MenubarEarlier::Off,
             _ => MenubarEarlier::Folded,
@@ -1036,6 +1119,7 @@ pub(crate) async fn read_settings_with(pool: &SqlitePool, baseline: u8) -> AppSe
         // return to the old seven-day shape.
         visible_start_hour,
         visible_end_hour,
+        visible_hours_fit: read(pool, VISIBLE_HOURS_FIT_KEY).await.map(|v| v == "1").unwrap_or(false),
         hide_weekends: read(pool, HIDE_WEEKENDS_KEY).await.map(|v| v == "1").unwrap_or(false),
         week_view_days: match read(pool, WEEK_VIEW_DAYS_KEY).await.as_deref() {
             Some("3") => 3,
@@ -1502,7 +1586,7 @@ pub enum Setting {
     MenubarDateFormat { format: String, custom: String },
     /// The widget's and popup's shared choices, stored as one.
     #[serde(rename_all = "camelCase")]
-    MenubarPreferences { day_view: bool, label: bool, join_minutes: u32 },
+    MenubarPreferences { day_view: bool, label: bool, join_minutes: u32, label_hours: u32 },
     /// The popup's own switch, alone, so it cannot write label/Join settings
     /// from an old feed.
     MenubarDayView(bool),
@@ -1528,8 +1612,14 @@ pub enum Setting {
     /// invoke from asking for an arbitrary number of day columns.
     WeekViewDays(u8),
     VisibleHours { start: u8, end: u8 },
+    /// Not a menu surface's: the menu bar's day view draws the plain range.
+    VisibleHoursFit(bool),
     HideWeekends(bool),
     CombineIdenticalEvents(bool),
+    /// The whole list, replaced in one write: the UI edits it as a list
+    /// (add, rename, reorder, delete, "update to current"), and one value is
+    /// one decision, never a half-applied edit.
+    CalendarGroups(Vec<CalendarGroup>),
     /// Also leaves "Last view" mode, in the same write — `WeekStart`'s shape.
     DefaultView(DefaultView),
     /// The Tasks pane's within-group order. View-only, so it needs no reboot
@@ -1729,9 +1819,12 @@ pub(crate) async fn store(pool: &SqlitePool, setting: &Setting) -> Result<(), Se
             write_all(pool, &[(MENUBAR_DATE_FORMAT_KEY, format), (MENUBAR_DATE_CUSTOM_KEY, custom)])
                 .await?;
         }
-        S::MenubarPreferences { day_view, label, join_minutes } => {
+        S::MenubarPreferences { day_view, label, join_minutes, label_hours } => {
             if *join_minutes > 60 {
                 return Err(refused("Choose a Join window from 0 to 60 minutes."));
+            }
+            if !LABEL_HOURS.contains(label_hours) {
+                return Err(refused("Choose one of the offered spans for the next meeting."));
             }
             write_all(
                 pool,
@@ -1739,6 +1832,7 @@ pub(crate) async fn store(pool: &SqlitePool, setting: &Setting) -> Result<(), Se
                     (MENUBAR_DAY_VIEW_KEY, flag(*day_view)),
                     (MENUBAR_LABEL_KEY, flag(*label)),
                     (MENUBAR_JOIN_MINUTES_KEY, &join_minutes.to_string()),
+                    (MENUBAR_LABEL_HOURS_KEY, &label_hours.to_string()),
                 ],
             )
             .await?;
@@ -1786,8 +1880,14 @@ pub(crate) async fn store(pool: &SqlitePool, setting: &Setting) -> Result<(), Se
             }
             write(pool, VISIBLE_HOURS_KEY, &format!("{start},{end}")).await?;
         }
+        S::VisibleHoursFit(on) => write(pool, VISIBLE_HOURS_FIT_KEY, flag(*on)).await?,
         S::HideWeekends(on) => write(pool, HIDE_WEEKENDS_KEY, flag(*on)).await?,
         S::CombineIdenticalEvents(on) => write(pool, COMBINE_IDENTICAL_EVENTS_KEY, flag(*on)).await?,
+        S::CalendarGroups(groups) => {
+            let groups = validate_calendar_groups(groups).map_err(SetError::Refused)?;
+            let json = serde_json::to_string(&groups).map_err(|e| SetError::Failed(e.into()))?;
+            write(pool, CALENDAR_GROUPS_KEY, &json).await?;
+        }
         S::DefaultView(view) => {
             write_all(pool, &[(DEFAULT_VIEW_KEY, view.as_str()), (DEFAULT_VIEW_FOLLOWS_LAST_KEY, "0")])
                 .await?;
@@ -1875,16 +1975,21 @@ mod tests {
             }
         ));
         assert!(matches!(
-            read(json!({"key": "menubarPreferences", "value": {"dayView": true, "label": false, "joinMinutes": 5}})),
-            Setting::MenubarPreferences { day_view: true, label: false, join_minutes: 5 }
+            read(json!({"key": "menubarPreferences", "value": {"dayView": true, "label": false, "joinMinutes": 5, "labelHours": 12}})),
+            Setting::MenubarPreferences { day_view: true, label: false, join_minutes: 5, label_hours: 12 }
         ));
         assert!(matches!(
             read(json!({"key": "menubarSections", "value": {"earlier": "off", "tomorrow": true, "daysAhead": 2}})),
             Setting::MenubarSections { tomorrow: true, days_ahead: 2, .. }
         ));
         assert!(matches!(read(json!({"key": "visibleHours", "value": {"start": 6, "end": 22}})), Setting::VisibleHours { start: 6, end: 22 }));
+        assert!(matches!(read(json!({"key": "visibleHoursFit", "value": true})), Setting::VisibleHoursFit(true)));
         assert!(matches!(read(json!({"key": "keepRemindersOnScreen", "value": true})), Setting::KeepRemindersOnScreen(true)));
         assert!(matches!(read(json!({"key": "hideWeekends", "value": true})), Setting::HideWeekends(true)));
+        assert!(matches!(
+            read(json!({"key": "calendarGroups", "value": [{"name": "Work", "calendarIds": [1, 2]}]})),
+            Setting::CalendarGroups(ref g) if g == &[CalendarGroup { name: "Work".into(), calendar_ids: vec![1, 2] }]
+        ));
         assert!(matches!(
             read(json!({"key": "menubarDateFormat", "value": {"format": "custom", "custom": "%-d"}})),
             Setting::MenubarDateFormat { .. }
@@ -1957,7 +2062,7 @@ mod tests {
     #[tokio::test]
     async fn popup_view_changes_preserve_label_and_join_preferences() {
         let p = pool().await;
-        store(&p, &Setting::MenubarPreferences { day_view: false, label: false, join_minutes: 15 }).await.unwrap();
+        store(&p, &Setting::MenubarPreferences { day_view: false, label: false, join_minutes: 15, label_hours: 24 }).await.unwrap();
         for day_view in [true, false] {
             store(&p, &Setting::MenubarDayView(day_view)).await.unwrap();
             let stored = read_settings(&p).await;
@@ -1974,15 +2079,30 @@ mod tests {
         assert!(!initial.menubar_day_view);
         assert!(initial.menubar_label);
         assert_eq!(initial.menubar_join_minutes, 5);
-        store(&p, &Setting::MenubarPreferences { day_view: true, label: false, join_minutes: 0 }).await.unwrap();
+        store(&p, &Setting::MenubarPreferences { day_view: true, label: false, join_minutes: 0, label_hours: 24 }).await.unwrap();
         let stored = read_settings(&p).await;
         assert!(stored.menubar_day_view);
         assert!(!stored.menubar_label);
         assert_eq!(stored.menubar_join_minutes, 0);
-        assert!(store(&p, &Setting::MenubarPreferences { day_view: false, label: true, join_minutes: 61 }).await.is_err());
+        assert!(store(&p, &Setting::MenubarPreferences { day_view: false, label: true, join_minutes: 61, label_hours: 24 }).await.is_err());
         assert!(read_settings(&p).await.menubar_day_view);
-        store(&p, &Setting::MenubarPreferences { day_view: false, label: true, join_minutes: 60 }).await.unwrap();
+        store(&p, &Setting::MenubarPreferences { day_view: false, label: true, join_minutes: 60, label_hours: 24 }).await.unwrap();
         assert_eq!(read_settings(&p).await.menubar_join_minutes, 60);
+    }
+
+    /// #167: how far ahead the bar's label reaches for the next meeting. A
+    /// day unless chosen, one of the offered spans only, and a stray row
+    /// lands on the day.
+    #[tokio::test]
+    async fn the_label_horizon_is_a_day_unless_chosen_and_only_an_offered_span() {
+        let p = pool().await;
+        assert_eq!(read_settings(&p).await.menubar_label_hours, 24);
+        store(&p, &Setting::MenubarPreferences { day_view: false, label: true, join_minutes: 5, label_hours: 4 }).await.unwrap();
+        assert_eq!(read_settings(&p).await.menubar_label_hours, 4);
+        assert!(store(&p, &Setting::MenubarPreferences { day_view: false, label: true, join_minutes: 5, label_hours: 5 }).await.is_err());
+        assert_eq!(read_settings(&p).await.menubar_label_hours, 4, "a refusal stores nothing");
+        write(&p, MENUBAR_LABEL_HOURS_KEY, "999").await.unwrap();
+        assert_eq!(read_settings(&p).await.menubar_label_hours, 24);
     }
 
     /// A fresh install has written none of these, and that is the ordinary
@@ -2978,6 +3098,45 @@ mod tests {
         assert!(!s.hide_weekends);
         write(&p, HIDE_WEEKENDS_KEY, "yes").await.unwrap();
         assert!(!read_settings(&p).await.hide_weekends, "a stray value must not change the app's face");
+    }
+
+    /// The fit switch round-trips through `Setting`, and a fresh install
+    /// leaves the hours out as before, for `hide_weekends`' reason.
+    #[tokio::test]
+    async fn the_visible_hours_fit_switch_is_stored_and_read_back() {
+        let p = pool().await;
+        assert!(!read_settings(&p).await.visible_hours_fit, "a fresh install crops to the visible hours");
+        let s = set(&p, Setting::VisibleHoursFit(true)).await.unwrap();
+        assert!(s.visible_hours_fit);
+        assert_eq!(read(&p, VISIBLE_HOURS_FIT_KEY).await.as_deref(), Some("1"));
+        let s = set(&p, Setting::VisibleHoursFit(false)).await.unwrap();
+        assert!(!s.visible_hours_fit);
+        write(&p, VISIBLE_HOURS_FIT_KEY, "yes").await.unwrap();
+        assert!(!read_settings(&p).await.visible_hours_fit, "a stray value must not change the app's face");
+    }
+
+    /// Calendar groups round-trip as one JSON row in the order given, the
+    /// stored form is trimmed and de-duplicated, what the switcher could not
+    /// tell apart or name is refused, and a hand-edited row reads as no groups.
+    #[tokio::test]
+    async fn calendar_groups_are_stored_validated_and_read_back() {
+        let p = pool().await;
+        assert!(read_settings(&p).await.calendar_groups.is_empty(), "a fresh install has none");
+        let g = |name: &str, ids: &[i64]| CalendarGroup { name: name.into(), calendar_ids: ids.to_vec() };
+        let s = set(&p, Setting::CalendarGroups(vec![g("  Work ", &[3, 1, 3]), g("Home", &[])])).await.unwrap();
+        assert_eq!(s.calendar_groups, vec![g("Work", &[1, 3]), g("Home", &[])]);
+        assert_eq!(read_settings(&p).await.calendar_groups, s.calendar_groups);
+        for bad in [
+            vec![g("   ", &[1])],
+            vec![g("Work", &[1]), g("work", &[2])],
+            vec![g(&"x".repeat(MAX_CALENDAR_GROUP_NAME + 1), &[1])],
+            (0..=MAX_CALENDAR_GROUPS).map(|i| g(&format!("g{i}"), &[])).collect(),
+        ] {
+            assert!(matches!(store(&p, &Setting::CalendarGroups(bad)).await, Err(SetError::Refused(_))));
+        }
+        assert_eq!(read_settings(&p).await.calendar_groups, s.calendar_groups, "a refusal stores nothing");
+        write(&p, CALENDAR_GROUPS_KEY, "not json").await.unwrap();
+        assert!(read_settings(&p).await.calendar_groups.is_empty());
     }
 
     /// The hour height round-trips, and a stored value the gesture could

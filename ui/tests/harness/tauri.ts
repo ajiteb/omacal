@@ -87,13 +87,13 @@ export type Harness = {
   failNextCreate(message: string): void;
   /** Make the next call to `set_calendar_selected` or `set_calendar_sync` reject —
    *  what a CalendarPopover spec uses to drive the failed-toggle path. */
-  failNextCalendarCall(cmd: 'set_calendar_selected' | 'set_calendar_sync' | 'set_task_completed', message: string): void;
+  failNextCalendarCall(cmd: 'set_calendar_selected' | 'set_calendars_shown' | 'set_calendar_sync' | 'set_task_completed', message: string): void;
   /** Park the *next* call to this calendar command instead of answering it —
    *  what a CalendarPopover spec uses to prove a second row's toggle doesn't
    *  free up a first row whose own call is still pending. */
-  holdNextCalendarCall(cmd: 'set_calendar_selected' | 'set_calendar_sync' | 'set_task_completed'): void;
+  holdNextCalendarCall(cmd: 'set_calendar_selected' | 'set_calendars_shown' | 'set_calendar_sync' | 'set_task_completed'): void;
   /** Answer the parked call for this command, then let its `.then` chain run. */
-  releaseCalendarCall(cmd: 'set_calendar_selected' | 'set_calendar_sync' | 'set_task_completed', value: unknown): Promise<void>;
+  releaseCalendarCall(cmd: 'set_calendar_selected' | 'set_calendars_shown' | 'set_calendar_sync' | 'set_task_completed', value: unknown): Promise<void>;
   /** Park the *next* `event_detail`, `refresh_event`, or `respond_to_event`
    *  call for this exact event id instead of answering it — what a
    *  `WeekGrid` spec uses to drive the supersession guard (open one block
@@ -499,13 +499,13 @@ function statusFor(scenario: string): AppStatus {
 const SIGNED_IN_CALENDARS: Calendar[] = [
   { id: 1, account_id: 1, account_email: 'new@x.com', summary: 'Personal',
     color_hex: '#5b8def', color_override: null, selected: true, sync_enabled: true, is_primary: true,
-    access_role: 'owner', provider: 'google' },
+    access_role: 'owner', supports_events: true, provider: 'google' },
   // A subscribed holiday calendar really is a `reader`, and this is the one
   // fixture in the suite that stands in for a real `sign_in` import — so it
   // carries the role a real one would rather than a uniformly writable list.
   { id: 2, account_id: 1, account_email: 'new@x.com', summary: 'Holidays',
     color_hex: '#e2a03f', color_override: null, selected: true, sync_enabled: true, is_primary: false,
-    access_role: 'reader', provider: 'google' },
+    access_role: 'reader', supports_events: true, provider: 'google' },
 ];
 
 function getWeek(scenario: string, weekStartMs: number, dayCount = 7): Promise<WeekPayload> {
@@ -700,6 +700,7 @@ type StubSettings = {
   minSyncIntervalMs: number;
   listMode: boolean;
   combineIdenticalEvents: boolean;
+  calendarGroups: { name: string; calendarIds: number[] }[];
   showDate: boolean;
   menubarDayView?: boolean;
   menubarLabel?: boolean;
@@ -707,6 +708,7 @@ type StubSettings = {
   menubarEarlier?: 'folded' | 'off';
   menubarTomorrow?: boolean;
   menubarDaysAhead?: number;
+  menubarLabelHours?: number;
   hourHeight: number;
   tasksWidth: number;
   fallbackReminderMinutes: number[];
@@ -734,6 +736,7 @@ type StubSettings = {
   weekViewDays: WeekViewDays;
   visibleStartHour: number;
   visibleEndHour: number;
+  visibleHoursFit: boolean;
   hideWeekends: boolean;
   displayTimezone: string | null;
   /** What the backend names the zone the process runs in. `null` derives it
@@ -795,6 +798,7 @@ const DEFAULT_SETTINGS: StubSettings = {
   transparentWindow: true,
   listMode: false,
   combineIdenticalEvents: false,
+  calendarGroups: [],
   // The mark, which is what the tray has always worn.
   showDate: false,
   // The grid's own 70, so every column golden holds.
@@ -821,12 +825,14 @@ const DEFAULT_SETTINGS: StubSettings = {
   menubarEarlier: 'folded',
   menubarTomorrow: true,
   menubarDaysAhead: 0,
+  menubarLabelHours: 24,
   // The week omacal has always drawn, so every golden holds.
   weekStart: 'monday',
   weekStartsToday: false,
   weekViewDays: 7,
   visibleStartHour: 0,
   visibleEndHour: 24,
+  visibleHoursFit: false,
   hideWeekends: false,
   displayTimezone: null,
   effectiveTimezone: null,
@@ -952,6 +958,15 @@ export function installTauriStub(scenario: string): Harness {
    *  `set_calendar_selected` moves, so that `list_tasks` can answer as the
    *  backend does. */
   const visibilityCalendars: Calendar[] = structuredClone(APP_WRITE_CALENDARS);
+  /** The `calendar-groups` scenario's list, whose `selected` flags the two
+   *  commands above move. Ends with a local task list (`sync_enabled` off, its
+   *  checkbox disabled), which a group must neither capture nor hide. */
+  const GROUP_LOCAL_LIST_ID = 40;
+  const groupCalendars: Calendar[] = structuredClone([
+    ...APP_WRITE_CALENDARS,
+    { ...APP_WRITE_CALENDARS[1], id: GROUP_LOCAL_LIST_ID, summary: 'Chores', provider: 'local',
+      sync_enabled: false, selected: true },
+  ]);
   let cancelPendingSignIn: ((reason: string) => void) | undefined;
   /** Whether `take_open_date` has answered — the real command clears on
    *  read, and a stub that kept answering would hide a remount replaying
@@ -1102,6 +1117,8 @@ export function installTauriStub(scenario: string): Harness {
               is_primary: false },
           ] as Calendar[];
         }
+        // Stateful, so a spec can watch a group switch change what is shown.
+        if (scenario === 'calendar-groups') return structuredClone(groupCalendars);
         return scenario === 'sign-in-adds-account' && signedIn
           ? SIGNED_IN_CALENDARS
           : ([] as Calendar[]);
@@ -1252,7 +1269,7 @@ export function installTauriStub(scenario: string): Harness {
           // The grouped keys land in the fields they are grouped from.
           case 'menubarPreferences':
             settings = saveSettings({ ...settings, menubarDayView: value.dayView,
-              menubarLabel: value.label, menubarJoinMinutes: value.joinMinutes });
+              menubarLabel: value.label, menubarJoinMinutes: value.joinMinutes, menubarLabelHours: value.labelHours });
             return heldMenubar(key, { ...settings });
           case 'menubarSections':
             settings = saveSettings({ ...settings, menubarEarlier: value.earlier,
@@ -1292,6 +1309,19 @@ export function installTauriStub(scenario: string): Harness {
         if (scenario === 'task-visibility') {
           const c = visibilityCalendars.find((c) => c.id === args.id);
           if (c) c.selected = Boolean(args.on);
+        }
+        if (scenario === 'calendar-groups') {
+          const c = groupCalendars.find((c) => c.id === args.id);
+          if (c) c.selected = Boolean(args.on);
+        }
+        return calendarResult(cmd, undefined);
+      // The bulk apply: exactly these shown, every other hidden.
+      case 'set_calendars_shown':
+        // Mirrors `set_selected_exactly`: only sync-enabled rows move, and a
+        // named id switches on only if it is one. A call told to fail moves
+        // nothing, as the real transaction would not.
+        if (failCalendarOnce?.cmd !== cmd) {
+          for (const c of groupCalendars) if (c.sync_enabled) c.selected = (args.ids as number[]).includes(c.id);
         }
         return calendarResult(cmd, undefined);
       case 'set_calendar_sync':
