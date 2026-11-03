@@ -13,3 +13,4 @@ test-results/
 /build
 /.flatpak-builder
 /repo
+/src-tauri/secret.tauri.conf.json
