@@ -269,10 +269,19 @@ async fn row_id_by_uid(state: &AppState, calendar_id: i64, uid: &str) -> anyhow:
 }
 
 /// Creates an event on a CalDAV calendar and answers with its detail.
+///
+/// `uid` is the identity to keep, when the event already has one: an `.ics`
+/// import passes the file's own UID (#180), so importing the same file again
+/// is recognised (`import::existing_uids` reads this calendar's UIDs) and a
+/// later update from the same sender can address the same event. `None` is a
+/// new event, which gets a fresh UUID. A kept UID names the event, not the
+/// file: the resource still gets a fresh UUID name, since a UID may hold
+/// characters a URL path cannot (`/`, spaces) and is not ours to escape.
 pub(crate) async fn create(
     state: &AppState,
     calendar_id: i64,
     fields: EventFields,
+    uid: Option<&str>,
 ) -> anyhow::Result<crate::events::EventDetail> {
     let (client, collection_url) =
         crate::caldav_account::client_for_calendar(state, calendar_id).await?;
@@ -282,7 +291,7 @@ pub(crate) async fn create(
         .await?;
 
     let (start, end, _) = endpoints(&fields.when, &fields.tz, &cal_tz)?;
-    let uid = uuid::Uuid::new_v4().to_string();
+    let (resource, uid) = identity(uid);
     let ev = EventWrite {
         uid: uid.clone(),
         summary: fields.summary,
@@ -296,9 +305,19 @@ pub(crate) async fn create(
         sequence: 0,
         attendees: attendees_for(&fields.guests),
         conference: None,
+        // Only what differs from a server's own assumption, the rule Google's
+        // create keeps: no `TRANSP:OPAQUE` or empty claim nobody made.
+        transp: fields
+            .transparency
+            .filter(|t| *t != crate::write::Transparency::Opaque)
+            .map(crate::write::Transparency::transp),
+        class: fields
+            .visibility
+            .filter(|v| *v != crate::write::Visibility::Default)
+            .map(crate::write::Visibility::class),
     };
     let ics = omacal_caldav::new_event_ics(&ev, now_ts());
-    let href = format!("{}/{uid}.ics", collection_url.trim_end_matches('/'));
+    let href = format!("{}/{resource}.ics", collection_url.trim_end_matches('/'));
     client.put(&href, &ics, None).await.map_err(friendly)?;
 
     created_but(
@@ -309,6 +328,17 @@ pub(crate) async fn create(
         }
         .await,
     )
+}
+
+/// The resource name and the UID a create writes, given the UID the event
+/// already has, if any (see [`create`]). A new event is named by its own fresh
+/// UID, as it always was; a kept UID gets a fresh name beside it.
+fn identity(kept: Option<&str>) -> (String, String) {
+    let fresh = uuid::Uuid::new_v4().to_string();
+    match kept.map(str::trim).filter(|u| !u.is_empty()) {
+        Some(uid) => (fresh, uid.to_string()),
+        None => (fresh.clone(), fresh),
+    }
 }
 
 /// **Past the PUT, no error may read as "the create failed."** The event
@@ -335,6 +365,23 @@ fn saved_but<T>(r: anyhow::Result<T>) -> anyhow::Result<T> {
         tracing::error!(%e, "changed on the CalDAV server, but the local half failed");
         anyhow::anyhow!(crate::events::SAVED_NOT_STORED)
     })
+}
+
+/// A stored "Show as" as the `TRANSP` a fresh resource should carry. Busy is
+/// `None`, since an absent `TRANSP` already means `OPAQUE`.
+pub(crate) fn transp_of_stored(transparency: &str) -> Option<omacal_caldav::Transp> {
+    (transparency == "transparent").then_some(omacal_caldav::Transp::Transparent)
+}
+
+/// A stored visibility as the `CLASS` a fresh resource should carry. Default
+/// is `None`: no line, which is what an event that never chose looks like.
+pub(crate) fn class_of_stored(visibility: &str) -> Option<omacal_caldav::Class> {
+    match visibility {
+        "public" => Some(omacal_caldav::Class::Public),
+        "private" => Some(omacal_caldav::Class::Private),
+        "confidential" => Some(omacal_caldav::Class::Confidential),
+        _ => None,
+    }
 }
 
 /// The attendee list a write owns, out of the guest list the form sends.
@@ -392,6 +439,9 @@ pub(crate) async fn update(
                 sequence: master.sequence + 1,
                 attendees: attendees_for(&fields.guests),
                 conference: None,
+                // `None` keeps the resource's own lines; see `rewrite_master`.
+                transp: fields.transparency.map(crate::write::Transparency::transp),
+                class: fields.visibility.map(crate::write::Visibility::class),
             };
             let out = omacal_caldav::rewrite_master(&raw, &uid, &ev, now, moved)
                 .ok_or_else(|| anyhow::anyhow!("could not rewrite the event's resource"))?;
@@ -425,6 +475,17 @@ pub(crate) async fn update(
                 sequence: 0,
                 attendees: attendees_for(&fields.guests),
                 conference: None,
+                // A brand-new resource has no lines of its own to keep, so an
+                // untouched field falls back to the master's: the rest of a
+                // free series stays free after the split.
+                transp: fields
+                    .transparency
+                    .map(crate::write::Transparency::transp)
+                    .or_else(|| transp_of_stored(&master.transparency)),
+                class: fields
+                    .visibility
+                    .map(crate::write::Visibility::class)
+                    .or_else(|| class_of_stored(&master.visibility)),
             };
             let ics = omacal_caldav::new_event_ics(&ev, now);
             let collection = href.rsplit_once('/').map(|(c, _)| c).unwrap_or("");
@@ -446,6 +507,10 @@ pub(crate) async fn update(
                 sequence: 0,
                 attendees: attendees_for(&fields.guests),
                 conference: None,
+                // `None` carries the exception's own lines, or the master's
+                // for a new exception; see `upsert_exception`.
+                transp: fields.transparency.map(crate::write::Transparency::transp),
+                class: fields.visibility.map(crate::write::Visibility::class),
             };
             let out = omacal_caldav::upsert_exception(&raw, &ev, now)
                 .ok_or_else(|| anyhow::anyhow!("could not write the occurrence's exception"))?;
@@ -677,6 +742,30 @@ mod tests {
         assert_eq!(saved_but(Ok(3)).unwrap(), 3);
     }
 
+    /// An imported event keeps the file's UID (#180): it is what lets a second
+    /// import of the same file be recognised, and a later update from the same
+    /// sender address the same event. Before, every create minted a UUID, so
+    /// the same file imported twice made every event twice.
+    #[test]
+    fn a_create_keeps_an_identity_the_event_already_has() {
+        let (resource, uid) = identity(Some("nvbpels-ethics-20261110@omamail"));
+        assert_eq!(uid, "nvbpels-ethics-20261110@omamail");
+        assert!(uuid::Uuid::parse_str(&resource).is_ok(), "the resource still gets a safe name: {resource}");
+
+        // A UID is not ours to escape into a path.
+        let (resource, uid) = identity(Some("a/b c@x"));
+        assert_eq!(uid, "a/b c@x");
+        assert!(!resource.contains('/') && !resource.contains(' '), "{resource}");
+
+        // A new event, or a blank UID, is a fresh UUID naming its own resource.
+        for kept in [None, Some(""), Some("   ")] {
+            let (resource, uid) = identity(kept);
+            assert!(uuid::Uuid::parse_str(&uid).is_ok(), "{kept:?} → {uid}");
+            assert_eq!(resource, uid, "{kept:?}");
+        }
+        assert_ne!(identity(None).1, identity(None).1, "fresh every time");
+    }
+
     #[test]
     fn a_failure_after_the_put_reads_as_created_not_stored() {
         let failed: anyhow::Result<i64> =
@@ -732,6 +821,7 @@ mod tests {
             sequence: 3,
             organizer_email: None,
             guests_can_modify: false,
+            transparency: "opaque".into(), visibility: "default".into(),
             attendees: Vec::new(),
             reminders: omacal_store::Reminders {
                 use_default: false,
@@ -775,6 +865,20 @@ mod tests {
         let cleared = crate::write::RemindersInput { use_default: true, overrides: vec![] };
         assert!(alarms_for(&Some(cleared), Some(&m)).is_empty());
         assert!(alarms_for(&None, None).is_empty(), "a create starts silent");
+    }
+
+    /// What a fresh resource (an export, the tail of a split) says about a
+    /// stored "Show as" and visibility: free and every chosen class as lines,
+    /// confidential included since a split must not quietly drop it, and busy
+    /// and default as no line at all, which is what they mean.
+    #[test]
+    fn a_fresh_resource_carries_free_and_a_class_but_writes_nothing_for_the_defaults() {
+        assert_eq!(transp_of_stored("transparent"), Some(omacal_caldav::Transp::Transparent));
+        assert_eq!(transp_of_stored("opaque"), None);
+        assert_eq!(class_of_stored("public"), Some(omacal_caldav::Class::Public));
+        assert_eq!(class_of_stored("private"), Some(omacal_caldav::Class::Private));
+        assert_eq!(class_of_stored("confidential"), Some(omacal_caldav::Class::Confidential));
+        assert_eq!(class_of_stored("default"), None);
     }
 
     #[test]

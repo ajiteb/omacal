@@ -156,6 +156,9 @@ export type Harness = {
   /** What the next `export_event` answers: a path, or `null` for a chooser
    *  the user dismissed. Set before the button is pressed. */
   exportAnswers(path: string | null): void;
+  /** What the next `pick_ics_file` answers: a path, or `null` for a chooser
+   *  the user dismissed (#180). */
+  pickAnswers(path: string | null): void;
   /** Every command the app has invoked, in order. */
   calls: { cmd: string; args: unknown }[];
   /** The values `set_setting` was sent for one key, oldest first — what a
@@ -166,6 +169,8 @@ export type Harness = {
 /** What the `export_event` stub answers. A spec sets it through
  *  `window.__harness.exportAnswers(...)` before pressing the button. */
 let exportAnswer: string | null = '/home/u/Documents/Board prep.ics';
+/** What the `pick_ics_file` stub answers; `pickAnswers(...)` sets it. */
+let pickAnswer: string | null = '/home/u/Downloads/webinars.ics';
 
 /** What `set_calendar_sync(id, false)` reports removing, absent a forced failure. */
 export const CALENDAR_SYNC_REMOVED = 143;
@@ -208,7 +213,10 @@ let parkedSync: {resolve: () => void; reject: (error: string) => void} | null = 
 /** A held `update_event` / `delete_event_cmd`, and the flag that arms one. */
 let holdWriteOnce: 'update_event' | 'delete_event_cmd' | 'create_event' | null = null;
 let parkedWrite: { resolve: (answer?: EventDetail) => void; reject: (message: string) => void } | null = null;
-type ResponseData = {week?: WeekPayload; month?: MonthPayload; invites?: PendingInvite[]; declines?: DeclineNotice[]; changes?: ChangeNotice[]};
+type ResponseData = {week?: WeekPayload; month?: MonthPayload; invites?: PendingInvite[]; declines?: DeclineNotice[]; changes?: ChangeNotice[];
+  /** The calendar list as the store holds it after a sync — set it, then emit
+   *  `sync-finished`, to stand in for collections made or deleted elsewhere. */
+  calendars?: Calendar[]};
 let responseData: ResponseData = {};
 let parkedSettings: (() => void) | null = null;
 let holdMenubarOnce: string | null = null;
@@ -251,6 +259,9 @@ const harness: Harness = {
   },
   exportAnswers(path) {
     exportAnswer = path;
+  },
+  pickAnswers(path) {
+    pickAnswer = path;
   },
   async emit(event, payload) {
     if (event === 'preferences-requested') preferencesPending = true;
@@ -1015,6 +1026,9 @@ export function installTauriStub(scenario: string): Harness {
           ['catppuccin-mocha', { bg: '#1e1e2e', surface: '#252535', text: '#cdd6f4', muted: '#a6adc8', accent: '#cba6f7', is_dark: true }],
           ['catppuccin-latte', { bg: '#eff1f5', surface: '#e9ebef', text: '#4c4f69', muted: '#5c5f77', accent: '#8839ef', is_dark: false }],
           ['rose-pine-dawn', { bg: '#faf4ed', surface: '#f5efe8', text: '#575279', muted: '#6e6a86', accent: '#286983', is_dark: false }],
+          ['retro-bloom', { bg: '#282828', surface: '#2f2f2f', text: '#ebdbb2', muted: '#a89984', accent: '#fe8019', is_dark: true }],
+          ['daylight', { bg: '#ffffff', surface: '#f4f6f9', text: '#14161a', muted: '#5a6270', accent: '#d32f3a', is_dark: false, style: { tint: 22, spine: 3, title_weight: 600, ink: 48, sub: 85, today: '#f2f2f4', heading_size: 24, heading_weight: 700 } }],
+          ['daylight-dark', { bg: '#16171a', surface: '#1f2125', text: '#eceef1', muted: '#9aa1ab', accent: '#ef5350', is_dark: true, style: { tint: 10, spine: 3, title_weight: 600, ink: 42, sub: 85, today: '#1e2024', heading_size: 24, heading_weight: 700, tint_space: 'srgb-linear', accent_fill: '#d32f3a' } }],
         ].map(([appearance, palette]) => ({ appearance, palette }));
       // Recorded in `calls` like everything else; the real one opens a
       // browser, which a test can only assert was *asked for*.
@@ -1036,6 +1050,8 @@ export function installTauriStub(scenario: string): Harness {
       // second, so the "says nothing for a cancel" rule has a way to fail.
       case 'export_event':
         return exportAnswer;
+      case 'pick_ics_file':
+        return pickAnswer;
       case 'get_status':
         return status;
       // The date a dated fresh launch parked on the backend. One scenario
@@ -1103,6 +1119,7 @@ export function installTauriStub(scenario: string): Harness {
       // assertion undisturbed. CalendarPopover specs never take this path —
       // they mount the component directly with fixture props instead.
       case 'get_calendars':
+        if (responseData.calendars) return structuredClone(responseData.calendars);
         // `cross-zone` needs a writable list for the same reason `writable`
         // does: without one the form's calendar select has nothing to seed
         // from and Save refuses, so the edit half of its agreement spec could

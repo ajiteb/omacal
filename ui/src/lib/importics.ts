@@ -7,6 +7,8 @@ export type Planned =
       summary: string;
       start_ms: number;
       all_day: boolean;
+      /** The repeat in the preview's words, end included ("weekly on Mon,
+       *  Wed, 10 times"), or `null` for a single event. */
       repeat: string | null;
       /** How many guests the file listed and the import will not carry. */
       dropped_guests: number;
@@ -26,6 +28,11 @@ export const planIcsImport = (calendarId: number, path: string) =>
 
 export const runIcsImport = (calendarId: number, path: string) =>
   invoke<ImportReport>('run_ics_import', { calendarId, path });
+
+/** The file chooser behind the form's "Import .ics…" (#180): the picked
+ *  path, or `null` when it was dismissed. Only a path, because what happens
+ *  next is the panel a dropped file opens. */
+export const pickIcsFile = () => invoke<string | null>('pick_ics_file');
 
 /** The sentence above the preview.
  *

@@ -877,6 +877,58 @@ test.describe('EventBlock hover occludes what it covers', () => {
     expect(declined, 'declined must not render the same text colour as accepted')
       .not.toBe(accepted);
   });
+
+  /** A declined block keeps one coloured edge, its spine at 45% of the
+   *  calendar's colour. A theme with a deeper hover fill (Daylight's 31%)
+   *  drew that fill nearly as strong as the spine, and the edge vanished
+   *  under the pointer, so a declined block hovers to the stock 16% in every
+   *  theme. Asserted as the fill it lands on and as the edge it leaves. */
+  test('a declined block keeps its spine on hover in a themed tint', async ({ page }) => {
+    await page.goto(show('EventBlock', 'rsvp-declined-15'));
+    const themes = {
+      daylight: { bg: '#ffffff', surface: '#f4f6f9', text: '#14161a', muted: '#5a6270',
+                  accent: '#d32f3a', is_dark: false,
+                  style: { tint: 22, spine: 3, title_weight: 600, ink: 48, sub: 85,
+                           today: '#f2f2f4', heading_size: 24, heading_weight: 700 } },
+      'daylight-dark': { bg: '#16171a', surface: '#1f2125', text: '#eceef1', muted: '#9aa1ab',
+                         accent: '#ef5350', is_dark: true,
+                         style: { tint: 10, spine: 3, title_weight: 600, ink: 42, sub: 85,
+                                  today: '#1e2024', heading_size: 24, heading_weight: 700,
+                                  tint_space: 'srgb-linear', accent_fill: '#d32f3a' } },
+    };
+    const ev = page.locator('.ev');
+    for (const [name, palette] of Object.entries(themes)) {
+      await page.evaluate((p) => (window as any).__setPalette(p), palette);
+      await ev.hover();
+      const got = await ev.evaluate((el) => {
+        const probe = (css: string) => {
+          const s = document.createElement('span');
+          s.style.color = css;
+          document.body.append(s);
+          const c = getComputedStyle(s).color;
+          s.remove();
+          return c;
+        };
+        const cs = getComputedStyle(el);
+        const spine = cs.boxShadow.match(/^(rgba?\([^)]*\)|color\([^)]*\))/)![1];
+        return {
+          fill: probe(cs.backgroundColor), spine: probe(spine),
+          stock: probe('color-mix(in srgb, #5b8def 16%, var(--bg))'),
+        };
+      });
+      expect(got.fill, `${name}: hovered fill`).toBe(got.stock);
+      // Channels to WCAG relative luminance, in either serialisation.
+      const lum = (css: string) => {
+        const fn = /^color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)/.exec(css);
+        const ch = fn ? fn.slice(1, 4).map(Number) : css.match(/[\d.]+/g)!.slice(0, 3).map((v) => Number(v) / 255);
+        const [r, g, b] = ch.map((v) => (v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4));
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      };
+      const [hi, lo] = [lum(got.spine), lum(got.fill)].sort((a, b) => b - a);
+      expect((hi + 0.05) / (lo + 0.05), `${name}: spine against the hovered fill`).toBeGreaterThan(1.25);
+      await page.mouse.move(0, 0);
+    }
+  });
 });
 
 /**
@@ -5497,6 +5549,108 @@ test.describe('EventForm', () => {
     expect(saved.notify).toBe('all');
   });
 
+  // --- Show as and visibility ---------------------------------------------
+
+  test('Show as and Visibility open on the stored values', async ({ page }) => {
+    await open(page, 'free-private');
+    await expect(page.getByLabel('Show as', { exact: true })).toHaveValue('free');
+    await expect(page.getByLabel('Visibility', { exact: true })).toHaveValue('private');
+    // No Confidential option on an event that is not confidential: it cannot
+    // be chosen, so offering it disabled everywhere would be noise.
+    await expect(page.getByLabel('Visibility', { exact: true }).locator('option'))
+      .toHaveText(['Default', 'Public', 'Private']);
+  });
+
+  /**
+   * A change to Show as alone sends that one key, and goes straight out on an
+   * event with guests: whether the user's own time is blocked is not news to
+   * anyone invited, so there is no notify choice to make.
+   */
+  test('changing only Show as sends only transparency and asks nobody', async ({ page }) => {
+    await open(page, 'with-guests');
+    await expect(page.getByLabel('Show as', { exact: true })).toHaveValue('busy');
+    await page.getByLabel('Show as', { exact: true }).selectOption('free');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+    await expect(page.getByRole('dialog', { name: 'Save event' })).toHaveCount(0);
+    const [saved] = await saves(page);
+    expect(saved.notify).toBe('none');
+    expect(saved.fields.transparency).toBe('transparent');
+    expect('visibility' in saved.fields).toBe(false);
+    expect('guests' in saved.fields).toBe(false);
+  });
+
+  /**
+   * Except on "This and following". That save splits the series: the
+   * occurrences from here on become a new event, created with the guest list,
+   * and that is news to every guest whatever field prompted it. "This event"
+   * and "All events" edit what the guests already have, so they skip.
+   */
+  test('a Show as change on This and following still asks about guests', async ({ page }) => {
+    await open(page, 'recurring-with-guests');
+    await page.getByLabel('Show as', { exact: true }).selectOption('free');
+    await page.getByRole('radio', { name: 'This and following' }).check();
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+    await expect(page.getByRole('dialog', { name: 'Save event' })).toBeVisible();
+    expect(await saves(page)).toEqual([]);
+    await page.getByRole('button', { name: 'Save and notify guests', exact: true }).click();
+    const [saved] = await saves(page);
+    expect(saved.scope).toBe('following');
+    expect(saved.notify).toBe('all');
+    expect(saved.fields.transparency).toBe('transparent');
+  });
+
+  for (const [radio, scope] of [['This event', 'this'], ['All events', 'all']] as const) {
+    test(`a Show as change on ${radio} goes straight out`, async ({ page }) => {
+      await open(page, 'recurring-with-guests');
+      await page.getByLabel('Show as', { exact: true }).selectOption('free');
+      await page.getByRole('radio', { name: radio }).check();
+      await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+      await expect(page.getByRole('dialog', { name: 'Save event' })).toHaveCount(0);
+      const [saved] = await saves(page);
+      expect(saved.scope).toBe(scope);
+      expect(saved.notify).toBe('none');
+    });
+  }
+
+  test('changing Visibility with something else still asks about guests', async ({ page }) => {
+    // The skip is for these two fields *alone*. A title change rides with it
+    // here, and that is news to the guests, so the choice comes back.
+    await open(page, 'with-guests');
+    await page.getByLabel('Visibility', { exact: true }).selectOption('private');
+    await page.getByLabel('Title', { exact: true }).fill('Board prep, moved');
+    await answerNotify(page, 'Save without notifying');
+
+    const [saved] = await saves(page);
+    expect(saved.fields.visibility).toBe('private');
+    expect('transparency' in saved.fields).toBe(false);
+  });
+
+  test('a save that leaves them alone sends neither, even when they are not the defaults', async ({ page }) => {
+    await open(page, 'free-private');
+    await answerNotify(page, 'Save without notifying');
+
+    const [saved] = await saves(page);
+    expect('transparency' in saved.fields).toBe(false);
+    expect('visibility' in saved.fields).toBe(false);
+  });
+
+  test('a confidential event shows it, cannot pick it, and keeps it on save', async ({ page }) => {
+    await open(page, 'confidential');
+    const select = page.getByLabel('Visibility', { exact: true });
+    await expect(select).toHaveValue('confidential');
+    await expect(select.locator('option[value="confidential"]')).toHaveJSProperty('disabled', true);
+
+    await page.getByLabel('Title', { exact: true }).fill('Review, renamed');
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+
+    const [saved] = await saves(page);
+    expect(saved.fields.summary).toBe('Review, renamed');
+    expect('visibility' in saved.fields).toBe(false);
+  });
+
   test('Save on an event with guests saves nothing until the choice is made', async ({ page }) => {
     // The panel must *gate* the save rather than merely appear. Witnessed by
     // the absence of a save while it is open — a dialog that is visible and
@@ -6210,6 +6364,39 @@ test.describe('WeekGrid: more all-day events than the band draws', () => {
     await page.goto('/tests/harness/index.html?c=AllDayBand&f=overflow');
     const bare = page.locator('.band .more');
     if (await bare.count()) expect(await bare.evaluate((el) => el.tagName)).toBe('DIV');
+  });
+});
+
+/**
+ * #185: a meeting room is a calendar, and the room's name is how people find
+ * their way to it. Google's card ends with the calendar's name; the popover
+ * named the description and nothing else, because a room's own address is
+ * what the organizer line hides and a room booking has no Location.
+ */
+test.describe('EventPopover: the calendar it is on', () => {
+  test('names the calendar in its colour, which for a room booking is the room', async ({ page }) => {
+    await page.goto('/tests/harness/index.html?c=EventPopover&f=room-calendar');
+    const line = page.locator('.pop .calendar');
+    await expect(line).toHaveText('LSG - Boardroom');
+    await expect(line.locator('.dot')).toHaveCSS('background-color', 'rgb(124, 179, 66)');
+    // The room's own address stays hidden, as before.
+    await expect(page.locator('.pop')).not.toContainText('resource.calendar.google.com');
+    await expect(page.locator('.pop .organizer')).toHaveCount(0);
+
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: async (value: string) => { (window as any).__fieldCopy = value; } },
+      });
+    });
+    await page.getByRole('button', { name: 'Copy calendar name' }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).__fieldCopy)).toBe('LSG - Boardroom');
+  });
+
+  test('says nothing when the calendar is not known', async ({ page }) => {
+    await page.goto('/tests/harness/index.html?c=EventPopover&f=readonly-conference');
+    await expect(page.locator('.pop')).toBeVisible();
+    await expect(page.locator('.pop .calendar')).toHaveCount(0);
   });
 });
 

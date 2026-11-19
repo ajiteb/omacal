@@ -26,6 +26,7 @@
   import { dateKey, freshness, getWeather, weatherByDate, type DayWeather, type WeatherReport } from './lib/weather';
   import WeatherPopover from './lib/WeatherPopover.svelte';
   import ImportPanel from './lib/ImportPanel.svelte';
+  import { pickIcsFile } from './lib/importics';
   import TasksSidebar from './lib/TasksSidebar.svelte';
   import { taskChips } from './lib/taskchips';
   import { setTaskCompleted, updateTask } from './lib/tasks';
@@ -478,6 +479,20 @@
     });
     return () => { un.then((f) => f()); };
   });
+  /** The new-event form's "Import .ics…" (#180): the platform's chooser,
+   *  then the same panel a dropped file opens. Choosing a file means bringing
+   *  events in rather than writing this one, so the form closes; dismissing
+   *  the chooser leaves it as it was, typed fields and all. */
+  async function importFromForm() {
+    try {
+      const path = await pickIcsFile();
+      if (path === null) return;
+      form = null;
+      importPath = path;
+    } catch (e) {
+      error = String(e);
+    }
+  }
   const openWeather = (dayStartMs: number, anchor: import('./lib/position').Rect) => {
     weatherCard = { dayStartMs, anchor };
   };
@@ -1258,6 +1273,12 @@
     const un = listen('sync-finished', async () => {
       await refreshStatus();
       await refreshInvites();
+      // A sync can also change *which* calendars exist: a CalDAV account
+      // lists its collections again on every pass (#174), so a calendar or
+      // task list made or deleted on another device lands here, not at the
+      // next launch. Before the reload, so the grid draws with it. Quiet,
+      // like the tray: a failed read keeps the list the window already has.
+      try { calendars = await getCalendars(); } catch { /* keep the last list */ }
       await reload();
       // A change whose own follow-up sync failed is retried now that a sync
       // has got through (spec 2026-10-09); nothing happens otherwise.
@@ -2784,6 +2805,7 @@
     anchor={form.anchor}
     initial={form.initial}
     chooseCalendar={form.mode === 'create' && form.chooseCalendar === true}
+    onimport={form.mode === 'create' && form.chooseCalendar !== true ? importFromForm : undefined}
     {calendars}
     onsave={saveForm}
     oncancel={() => (form = null)}
